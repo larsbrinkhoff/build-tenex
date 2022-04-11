@@ -1,0 +1,92 @@
+
+
+
+     Link11 is the PDP-11 linker used at CMU instead of  DEC's LNKX11
+for  linking (on  the PDP-10)  files produced  by MACX11,  MACY11, or
+MACN11.
+
+     Link11 differs  from LNKX11 in  several respects, most  of which
+are extensions.  The most noticeable of the changes are:
+        1) DDT-11 support, including creation of symbol tables
+        2) Graphic Monitor support for the GDP-2
+        3) Support for L*, a language(?) designed at CMU
+        4) Compatable with the TOPS-10 monitor CCL feature
+        5) Maintained at CMU -- bugs can be fixed (see Rick Gumpertz)
+
+     If  called  via  the  COMPIL CUSP  (CCL),  the  command  line is
+automatically created and passed  to Link11 by that program.   If run
+directly, Link11 prompts on the TTY with a version number and  a "*".
+The user should then type a command line, which is of the form:
+        BINFIL,MAPFIL=OBJFIL1,OBJFIL2,...,OBJFILn/SWITCH1.../SWITCHm
+The character "←"  may be substituted for  "=" and the  character "%"
+for "/". On  the right side  of the "=",  "+" may be  substituted for
+",".  In addition, several  switches may be enclosed  in parentheses,
+separated by spaces.  Spaces in the command line are usually ignored.
+
+     Command files may be inserted by including CMDFIL@ or @CMDFIL in
+the command  line.  Line numbers,  line boundaries, etc.  are ignored
+when  reading a  command-file.   There is  no explicit  limit  to the
+number of command files allowed or to the depth of nesting thereof.
+
+     The following switches are currently defined:
+/T      Tell the user on his TTY various information as Link11 runs
+/T:n    Set  the transfer  address to  n (octal)  (note that  this is
+        totally different from /T without a ":"!)
+/B:n    Set  the initial  load address  to n  (octal) instead  of the
+        default which is 10000 (must not be used with /M)
+/B      Equivalent to /B:0 which is probably not useful
+/D:n    Load DDT at the end of the program; put n null symbols in the
+        symbol table (n currently octal, will be changed to decimal)
+/D      Equivalent to /D:5
+/L      Produce a .MAP  file even if no  MAPFIL was specified  in the
+        command line (useful with CCL)
+/P      Produce a .LDA file instead  of .BIN (This is the  default in
+        LNKX11) (same as .BIN but packed format)
+/M      Produce a  .LNK file  instead of  .BIN, suitable  for loading
+        with the Graphic Monitor
+/G      Load   into   GDP-2   double-port   memory   (Graphic  space)
+        (meaningful only together with /M)
+/S      Suppress internal symbols to  save space (i.e don't  put them
+        in the DDT symbol table)
+/$      Like  /S,  but  suppress  only  those  symbols  whose  second
+        character  is  "$"  (used  to  suppress   Bliss-11  generated
+        symbols)
+
+
+
+/U      Enable  special processing  for University  of  California at
+        Berkeley
+/*      Enable L* processing
+/E      Ignored for LNKX11 compatability
+/C      Produce a "ComDir"  at the front  of the output  file (Always
+        done in LNKX11)
+
+     This paragraph explains some of the nitty-gritty of  DDT support
+for anyone who  cares.  Most users will  simply say /D and  not worry
+any further  about it.   If DDT is  present, a  symbol table  will be
+produced at  the address  indicated by the  GLOBAL symbol  D.SYMT.  A
+user may use  his own version  of DDT simply  by including it  in the
+command string instead of the /D switch.  To cause Link11  to realize
+that DDT is present, the  GLOBALs "DDT" and "JOBSA" must  be defined.
+D.SYMT will be defined at the end of the program if it is not already
+defined.  Since the system DDT  defines D.SYMT at its end,  it should
+always be loaded last.   (Otherwise the symbol table  would overwrite
+the  program!) This  is guaranteed  by the  /D switch.   The location
+indicated by  the GLOBAL  JOBSA will be  overwritten with  what would
+have  been the  transfer address  if DDT  had not  been  loaded.  The
+actual transfer address will be  DDT, so that DDT will be  run before
+the user program.  The symbol table passed to DDT includes all GLOBAL
+symbols (including  .CSECT names).   If .ENABL  ISD was  specified in
+MACN11, local symbols will also  be put in the symbol  table, subject
+to restrictions by  the /S and /$  switches.  In addition,  any local
+symbols with the same name as previously encountered symbols  will be
+ignored.  The symbols R0-R7, SP, and PC are ignored since  the system
+DDT already handles  the normal register  names in a  special manner.
+Other register symbols are defined using the assumption that JOBSA is
+just after an array of 8 words where DDT keeps the  user's registers.
+The  location indicated  by the  GLOBAL JOBDDT,  if defined,  will be
+overwritten with the  address in DDT which  may be called with  a JSR
+PC,@JOBDDT (this address is DDT+2).  The system DDT leaves this to be
+defined  by  the  user if  he  wants  it.  This  allows  the  user to
+initialize the location  JOBDDT with the address  of a routine  to be
+called if DDT is not present.
