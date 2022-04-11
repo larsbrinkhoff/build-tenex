@@ -1,0 +1,281 @@
+;	TITLE	CRSHSV saves image of crashed monitor on disk
+;
+;	WRITES MONITOR, PAGE AT A TIME (IGNORING
+;	NXM pages) onto special (non-public) area of disk.
+;	uses one page on disk as a control page to see if there
+;	is a free area on which to do a dump; if not, no action is
+;	taken, thus preserving the first of a string of crashes.
+;
+;
+;	Control page format is:
+;	 36 bit/word bit map for each crash area
+;
+;	Michael Heathman 7/10/74
+;
+	SEARCH	PROLOG,STENEX
+	.TITLE	CRASH
+Z=0
+A=1	
+B=2
+C=3
+D=4
+E==5
+F==6
+P=17
+
+;
+;
+;	listed in DSKPAK as well:
+;
+	EXTERN DSKCML,CSHSIZ,NCSHSV,NSECPG,DSKCSS
+DSK=250
+
+CSHNPD=14		;CRSHSV pdl size
+NBCSHW=<1000+^D35>/^D36 ;number bit words/crsh
+NCSHWD=NBCSHW*3		;number of used words on control page
+			;(DEFINED HERE AND IN DSKPAK - ANY CHANGE MUST
+			;BE MADE TO BOTH FILES - CURSE MACRO/LOADER FOR
+			;NOT ALLOWING EXTERNALS IN PRODUCTS)
+CSHCOR=20		;starting core address for dump
+NCSHDT=13		;number of crash data words
+
+	LS(CSHACS,20)	;save AC's
+	LS(CSHCCM,2)	;LOCAL CHANNEL COMMAND WORD
+	LS(CSHPDL,CSHNPD) ;stack
+	LS(CSHDAT,NCSHDT) ;local crash data
+	LS(CSHWDS,NCSHWD) ;control page buffer
+
+ 	EXTERN DISKP,DSKCP,CVDSK,TODCLK,TADDAY,CRSTD1,BUGHLT
+	INTERN CRSHSV
+;	EXTERN KIP7F,KITLCK
+CRSHSV:	0
+CRSH0:	CONI	PI,CSHDAT+1	;SAVE PI STATE FOR EXAMINATION 
+	PIOFF
+	CONI	APR,CSHDAT
+	
+	MOVEM	0,CSHACS	;save AC's
+	MOVE	0,[XWD 1,CSHACS+1]
+	BLT	0,CSHACS+17
+
+	SKIPGE	DISKP		;do we have a disk?
+	 JRST	CRSH10		;no
+
+	CONI	DSK,CSHDAT+2	;SAVE DISK STATE FOR EXAM AND RESTART 
+	DATAI	DSK,CSHDAT+3	
+
+	CONSZ	DSK,DSKBSY	;WAIT FOR CONTROLLER DONE
+	 JRST	.-1
+
+	DATAI	DSK,A		;WAIT FOR POSSIBLE SEEKS DONE
+	TLNN	A,(1B15+1B14+1B11) ;IF NO SUCH DRV, FILE UNSAFE, SEEK INC
+	TLNN	A,(1B13)	;OR OFF LINE
+	 JRST	.+3		;THEN DRIVE QUIESCENT
+	TLNN	1,(1B12)	;ELSE ON CYL?
+	 JRST	.-5		;YES, WAIT
+
+ 	MOVE	P,[IOWD CSHNPD,CSHPDL] ;set up stack
+
+;	IFN	KIFLG,
+;<
+;	PUSH	P,KITLCK
+;	SETZM	KIP7F
+;	SETOM	KITLCK
+;>
+
+	MOVE	A,DSKCP		;save various transitory data
+	MOVEM	A,CSHDAT+4
+	MOVE	A,[XWD TADDAY,CSHDAT+5]
+	BLT	A,CSHDAT+6
+	MOVE	A,TODCLK
+	MOVEM	A,CSHDAT+7
+	MOVE	A,BUGHLT	;GET REASON FOR CRASH
+	MOVEM	A,CSHDAT+10
+	MOVE	A,CRSTD1	;GET TIME OF CRASH
+	MOVEM 	A,CSHDAT+11
+	MOVEI	A,CSHWDS	;save CSHWDS for later use by
+	MOVEM	A,CSHDAT+12	;recovery program (GCRASH)
+
+	MOVEI	A,CSHCCM	;set up channel command words
+	MOVEM	A,DSKCP
+	SETZM	CSHCCM+1
+
+	PUSH	P,26
+	MOVEI	A,CSHDAT	;pointer for later recovery program
+	MOVEM	A,26
+
+	PUSHJ	P,ICTL		;read in control page
+	 JRST	CRSH9		;error in reading, abort dump
+
+	MOVNI	E,NCSHSV	;look for free dump area (LOADER won't
+	HRLS	E
+	HRRI	E,CSHWDS	;link into left half of literal)
+;;;	MOVE	E,[XWD -NCSHSV,CSHWDS] ;look for free dump area
+CRSH1:	SKIPN	(E)
+	 JRST	CRSH2		;found free area
+	ADDI	E,NBCSHW-1
+	AOBJN	E,CRSH1
+	JRST	CRSH9		;no free areas, abort dump
+
+CRSH2:	MOVS	A,E		;set up disk adr
+	MOVEI	A,NCSHSV(A)
+	IMULI	A,CSHSIZ
+	ADD	A,DSKCML	;GENERATE FIRST PAGE OF CRASH IMAGE
+	ADDI	A,NSECPG	;IT IS ONE PAGE FROM CONTROL PAGE
+
+	MOVEI	D,CSHSIZ	;set up disk crash area upper limit
+	ADD	D,A
+
+	MOVEI	C,CSHCOR	;set up starting core address
+	MOVE	B,C		;and length of first xfr
+	ANDI	B,777
+	SUBI	B,1000
+	MOVN	B,B
+	TLO	B,(1B14)
+
+	MOVSI	F,(1B0)		;set up bit marker
+
+	SETZM	(E)		;zero out bit map 
+	HRLI	Z,(E)
+	HRRI	Z,1(E)
+	BLT	Z,NBCSHW-1(E)	
+	HRLI	E,-NBCSHW
+
+CRSH4:	PUSH	P,A		;save linear disk address
+	PUSHJ	P,CSHIO		;write out page
+	SKIPN	A		;any write errors?
+	 IORM	F,(E)		;no, set in use bit
+	POP	P,A
+
+CRSH3:	ADDI	A,NSECPG	;increment disk address
+	CAML	A,D		;and if greater than dump area,
+	 JRST	CRSH5		;abort dump
+
+	ADDI	C,1000		;increment core address
+	TRZ	C,777
+	CAML	C,[MAXCOR*1000]	;and if greater than core size,
+	 JRST	CRSH5		;stop dump
+
+	MOVE	B,[XWD 10,1000] ;set to write page at a time
+
+	LSH	F,-1		;inc bit counter
+	JUMPN	F,CRSH4		;next bit word
+
+	MOVSI	F,(1B0)
+	AOBJN	E,CRSH4		;inc word counter, end dump on ovrflw
+	
+CRSH5:	PUSHJ	P,OCTL		;write out control page
+	 CAI			;no-op on write error
+
+CRSH9:	MOVE	A,CSHDAT+4	;reset disk control word pointer
+	MOVEM	A,DSKCP
+
+	HLLZ	A,CSHDAT+3	;RECONNECT ORIGINAL DRIVE TO CONTROLLER
+	TLZ	A,077777	;SELECT JUST DRIVE BITS
+	LSH	A,-3		;MOVE TO RIGHT PLACE
+	TLO	A,600000	;MAKE NO OP COMMAND
+	DATAO	DSK,A		;SELECT DRIVE
+
+	MOVE	A,CSHDAT+2	;RESET DISK
+	ANDI	A,7		;GET JUST PI CHANNEL
+	CONO	DSK,DSKCLR(A)	;RESET CONTROLLER
+
+	POP	P,26		;restore 26
+
+;	IFN	KIFLG,<POP P,KITLCK>
+
+CRSH10:	MOVE	17,[XWD CSHACS,0] ;restore AC's
+	MOVE	1,CSHDAT+1	;look at previous PI state
+	TRNN	1,1B28		;was it on?
+	 JRST	[BLT 	17,17	;no
+		JRST @CRSHSV]
+
+	BLT	17,17		;yes
+	PION			;then turn it on now.
+	JRST	@CRSHSV
+OCTL:	MOVE	B,[XWD 10,NCSHWD]
+	CAIA
+ICTL:	MOVE	B,[NCSHWD]
+	MOVE	A,DSKCML	;read in control info
+	MOVEI	C,CSHWDS
+	PUSHJ	P,CSHIO
+	SKIPN	A		;ctl page error?
+	 AOS	(P)		;no
+	RET
+;
+;	disk io routine, simple polled device handler
+;
+;	PUSHJ	P,CSHIO  with:
+;	 1/ linear address
+;	 2/ <write flag>B14+length of xfr
+;	 3/ core address
+;
+;	returns+1 with:
+;	 1/ CONI status bits
+;
+DSKCLR=37B24+17B29+1B32	;clear all flags
+DSKSEK=400000	;seek op
+DSKBSY=20	;BUSY flag
+DSKSER=1B11	;DATAI SEEK ERROR BITS
+DSKOFL=1B13	;DATAI SEEK OFFLINE BIT
+DSKOCL=1B12	;DATAI SEEK ON CYLINDER BIT
+DSKFUS=1B14	;DATAI FILE UNSAFE BIT
+DSKDON=1B32	;DONE BIT
+
+	OPDEF	DELAY [ROT Z,^D72]
+
+	DEFINE	WAIT =
+<
+	CONI	DSK,A		;;get status
+	TRNE	A,DSKBSY	;;still busy?
+	 JRST	.-2		;;try again
+	TRZ	A,17		;;done, clean up status word
+>
+
+CSHIO:	PUSH	P,B		;save B
+
+	CONO	DSK,DSKCLR	;clear controller
+
+	MOVE	B,DSKCML
+	ADDI	B,DSKCSS
+	CAML	A,DSKCML	;make sure possible write is inside
+	CAMLE	A,B		;CRASH SAVE AREA
+	 JRST	CSHIO1		;its not
+
+	CALL	CVDSK		;convert linear to hardware address
+	LSH	A,^D12		;move to right place for DATAO
+	MOVE	B,A
+
+	AND	A,[XWD 77760,200000] ;zero spares bits
+	TLO	A,DSKSEK	;set in seek opcode
+	DATAO	DSK,A		;issue seek
+	DELAY
+
+CSHIO2:	DATAI	DSK,1		;GET DRIVE STATUS
+	TLNN	A,(DSKSER)		;ERROR
+	TLNN	A,(DSKOFL)		;OR NOT ON LINE
+	JRST	CSHIO1		;ABORT XFR
+	TLNN	A,(DSKOCL)		;ON CYL
+	JRST 	CSHIO2		;NO, WAIT
+	CONO	DSK,DSKDON	;CLEAR DONE
+
+	MOVE	A,(P)		;get length
+	ANDI	A,1777		;remove possible write flag
+	MOVNS	A
+	HRLS	A		;form IOWD
+	HRR	A,C		;get core address
+	SOJ	A,		;form IOWD
+	MOVEM	A,CSHCCM	;set up command word
+
+	HLLZ	A,(P)		;get operation flag
+	TLZ	A,777767	;alone
+	LSH	A,^D12		;shift into opcode place
+	IOR	A,B		;set in address
+	IORI	A,DSKCP		;set in ICWA address
+	DATAO	DSK,A		;issue xfr command
+	WAIT			;wait till done
+
+CSHIO1:	POP	P,B		;restore B
+	RET
+
+	.END
+

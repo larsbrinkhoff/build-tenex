@@ -1,0 +1,24 @@
+The SUMEX GTJFN features are entered under two switches (see GTJFN.DOC
+and notes in edit tracks of specific files.  SRCCOM comparison not on
+line):
+
+  USRMOD	0 - normal monitor assembly
+		1 - user mode assembly (see USRGTJ.DOC)
+
+  SMXGTJ	0 - standard GTJFN facilities
+		1 - SUMEX GTJFN facilities
+
+The following files are affected:
+
+	DEVICE.MAC
+	DIRECT.MAC
+	FILE.MAC
+	FREE.MAC
+	GTJFN.MAC
+	JSYS.MAC (JFNS)
+	LOOKUP.MAC
+	NETWRK.MAC
+	NIL.MAC
+	PARAMS.MAC
+	STRING.MAC
+

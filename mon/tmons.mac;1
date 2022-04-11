@@ -1,0 +1,107 @@
+	title	mons
+	search	stenex
+a==1
+b==2
+c==3
+d==4
+
+i==5
+j==6
+k==7
+
+p==17
+lpdl==100
+
+mons:	reset
+	move	p,[iowd	lpdl,pdl]
+m.1:	hrroi	a,[asciz/Which MONSYMS file? /]
+	psout
+	movsi	a,160003
+	move	b,[100,,101]
+	gtjfn
+	 jrst	m.1
+	movem	a,mjfn#
+	move	b,[440000,,200000]
+	openf
+	 jrst	m.1
+m.3:	hrroi	a,[asciz/Output file? /]
+	psout
+	movsi	a,660003
+	move	b,[100,,101]
+	gtjfn
+	 jrst	m.3
+	movem	a,ojfn#
+	move	b,[070000,,100000]
+	openf
+	 jrst	m.3
+
+	move	a,mjfn
+	bin
+	move	i,b
+m.2:	move	a,mjfn
+	bin
+	push	p,b
+	move	a,ojfn
+	ldb	b,[point 4,b,3]
+	move	c,[1b2+2b17+10b35]
+	nout
+	 halt
+	movei	b," "
+	bout
+	move	j,0(p)
+m4:	pushj	p,rad50
+	movei	b," "
+	bout
+	bout
+	bout
+	bout
+	movei	b,11
+	bout
+	pop	p,b
+	move	c,[1b2+16b17+10b35]
+;	nout
+;	 halt
+;	movei	b,11
+;	bout
+	move	a,mjfn
+	bin
+	move	a,ojfn
+	nout
+	 halt
+	movei	b,15
+	bout
+	movei	b,12
+	bout
+	aobjn	i,.+1
+	aobjn	i,m.2
+	move	a,mjfn
+	closf
+	 halt
+	move	a,ojfn
+	closf
+	 halt
+	haltf
+	jrst	mons
+	
+rad50:	hrrz	a,ojfn
+	ldb	c,[point 32,j,35]
+spt1:	idivi	c,50
+	hrlm	d,0(p)
+	skipe	c
+	pushj	p,spt1		;a little recursion here
+	hlrz	c,0(p)		;retrieve char
+	jumpe	c,tout
+	addi	c,257
+	caile	c,271
+	addi	c,7
+	caile	c,332
+	subi	c,70
+	cain	c,243
+	movei	c,256
+tout:	move	b,c
+	bout
+	popj	p,
+
+pdl:	block	lpdl
+
+	end	mons

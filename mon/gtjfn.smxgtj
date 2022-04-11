@@ -1,0 +1,3743 @@
+;<MON>GTJFN.MAC;5		6/10/77		EDIT BY RINDFLEISCH
+;  Changed defaulting of ;T and ;S files.  Now handled as regular
+;  defaulting unless bit 5 on in flags or ;T input explicitly
+;<MON>GTJFN.MAC;5		4/11/77		EDIT BY RINDFLEISCH
+;  Fixed GNJFN when user supplies stepping flags for name and/or
+;  extension and these were not steppable in the original JFN.  JSB
+;  free space got screwed up since specific name/ext blocks are trimmed
+;  but if stepped later, next name/ext may not fit.
+;<MON>GTJFN.MAC;4		4/5/77		EDIT BY RINDFLEISCH
+;  Fixed GNJFN handling of deleted files - blind to files with most recent
+;  versions deleted if ;0 input (see also change in DIRECT.MAC
+;<MON>GTJFN.MAC;4		2/28/77		EDIT BY RINDFLEISCH
+; Added USRMOD switch to allow assembly in user test mode
+; Added SMXGTJ switch to introduce following extended features
+;  Extended wild cards (* and %)
+;  Backing up over fields
+;  User typescript of terminal entry
+;  User-supplied prompt string from retype
+;  ? facilties for dir/name/ext/version prompting
+;  134 fixes for ;S files, * confirmation, etc.
+;  Protection conventions - file protection checked before assigning
+;   a JFN
+;  Fix so NNAMF AND NVERF devices can't have * versions
+;  Fix so GTJFN can't change prot, acct, and tempff on OLD files
+;   (FTPSRV loophole)
+;<SCHULZ>GTJFN.MAC;2    23-NOV-76 15:10:34    EDIT BY SWEER
+;FIX REDFLT TO ALLOW 38 AND 39 CHAR FILE NAMES
+;<TENEX-130>GTJFN.MAC;65    28-DEC-72 13:57:17	EDIT BY TOMLINSON
+; NO "ECHO" OF TERMINATOR FROM STRING
+;<TENEX-130>GTJFN.MAC;64     9-NOV-72 21:05:59	EDIT BY TOMLINSON
+;<TENEX-130>GTJFN.MAC;63     6-NOV-72 11:48:09	EDIT BY TOMLINSON
+; STRNAM+3/ JUST ERRDO, ENDAL5: DON'T RETURN EXTXF
+;<DLM/TEMP>GTJFN.MAC;62    30-OCT-72 18:05:36	EDIT BY TOMLINSON
+;<DLM/TEMP>GTJFN.MAC;61    30-OCT-72 17:38:32	EDIT BY TOMLINSON
+; FIXES FOR STARS, ? ADDED
+;<FILESYSTEM>GTJFN.MAC;60    25-AUG-72 17:32:04	EDIT BY TOMLINSON
+;<FILESYSTEM>GTJFN.MAC;59    29-JUN-72  9:57:33	EDIT BY TOMLINSON
+
+	SEARCH	FILEDEF,STENEX
+IFE USRMOD,<   IFN IMSSS+SUMEX,< SEARCH PROLOG >  >
+	TITLE	GTJFN	; & gnjfn
+	SUBTTL	R.S.Tomlinson
+
+IFN	USRMOD,<  EXTERN  USRACS>
+IFE IMSSS+SUMEX,< EXTERN  MJFN>
+EXTERN	ACCCHK,ACCTPT,ACCTSR,ASGJFR,CHKJFN,CPOPJ,DBP,DEVLUK,DIRCHK
+EXTERN	DIRLKX,DIRLUK,ERRD,ERUNLD,EXTLKX,EXTLUK,GDIRST,GETFDB,MDDNAM
+EXTERN	MODES,NAMLKX,NAMLUK,RELFRE,SKMRTN,SKPRET,UNLCKF,USTDIR,VERLUK
+IFN SMXGTJ,<
+	EXTERN VERLKX,JOBDIR,MDDDIR
+	>
+IFE	USRMOD,<
+	USE	SWAPPC
+	>
+
+EXTERN	NXTDMP		; Zero this to cause open files to be written
+EXTERN	MPP		; Saved push pointer on entry to gtjfn
+
+DEFINE	TMSG(M)<
+	HRROI B,[ASCIZ M]
+	PUSHJ P,TSTR>
+
+DEFINE	CHOUT(C)<
+	MOVEI B,C
+	PUSHJ P,OUTCH>
+
+DEFINE	ERUNLK(ERRORN,EXTRA)<
+JRST [
+	EXTRA
+	IFDIF <ERRORN>,<>,<MOVEI A,ERRORN>
+	JRST ERUNLD]>
+
+DEFINE	ERR(ERRORN,EXTRA)<
+JRST [
+	EXTRA
+	IFDIF <ERRORN>,<>,<MOVEI A,ERRORN>
+	JRST ERRD]>
+
+DEFINE	ERRLJF(N,EXTRA)<
+JRST	[
+	EXTRA
+	IFDIF <N>,<>,<MOVEI A,N>
+	JRST ERRDO]>
+
+IFN SMXGTJ,<
+DEFINE	CHRTP(C)<
+	MOVEI A,C
+	PUSHJ P,RTPCH>
+
+DEFINE	RTPMSG(M)<
+	HRROI A,[ASCIZ M]
+	PUSHJ P,RTSTR>
+
+DEFINE	RTSTAR<
+	CHRTP("*")>
+
+DEFINE	RTPFLG(RFLAG)<
+	MOVSI A,RFLAG
+	HRRZ B,FILEXW(JFN)
+	IORM A,BLKFG(B)>
+
+	>	; End of IFN SMXGTJ conditional
+
+; Get a jfn for a file name
+; Call:	1	; E
+;	2	; String designator
+;	GTJFN
+; Or
+;	LH(1)		; Flags (bit 17 = 1)
+;	RH(1)		; Default version
+;	2		; String designator or xwd infile,outfile
+;	GTJFN
+; Return
+; +1 error, in 1, error code
+; +2 ok, in 1, the jfn for the file
+
+;	LH(E)	; Flags
+;	RH(E)	; Default version
+;	LH(E+1)	; Input jfn (377777 means none)
+;	RH(E+1)	; Output jfn (377777 means none)
+;	E+2	; Default string pointer device
+;	E+3	; Default string pointer directory
+;	E+4	; Default string pointer name
+;	E+5	; Default string pointer extension
+;	E+6	; Default string pointer protection
+;	E+7	; Default string pointer account
+;	E+10	; Desired jfn if jfnf=1 (optional)
+
+IFN SMXGTJ,<
+;  If flag bit 15 (LLTBF) is on in long GTJFN, the following 3
+;  locations are used:
+;
+;    LH(E+11)	; Additional control flags (see TOPS-20 GTJFN)
+;		   Bit 0 - Break if del past start of input
+;		       1 - Unassigned
+;		       2 - Names LE 6 chars and Ext LE 3 (Not implemented)
+;		       3 - Return confirmation msg with typescript
+;    RH(E+11)	; Number of extended table words following
+;	E+12	; String ptr to user typescript buffer 
+;	E+13	; Size of typescript buffer in characters (default MAXRC)
+;	E+14	; String ptr to Prompt string output before retyping
+	>
+; If a default string pointer is 0, then it is assumed unspecified
+; If the lh of a default string pointer is 777777, 440700 is assumed
+
+; Parameters
+
+MAXLC==:^D39
+MAXLW==:8
+
+IFN SMXGTJ,<
+; Indices into retype buffer contents
+BLKBP=1			; Retype buffer index to current byte ptr
+BLKCT=2			; Retype buffer index to char count remaining
+BLKFG=3			; Retype buffer index to retype/user flags
+USRBP=4			; Retype buffer index to user typescript ptr
+USRCT=5			; Retype buffer index to typescript buffer size
+BLKDT=6			; Retype buffer index to first data word
+
+; Indices into extended long GTJFN table
+EXTWD=11		; LH = ctl bits,,RH = # words following
+TPPTR=12		; Typescript string pointer
+TPCNT=13		; Max typescript characters
+PRPTR=14		; Prompt string pointer
+
+; Retype buffer size parameters
+MAXRW==:^D30+BLKDT	; Retype buffer size in words
+MAXRC==:<5*<MAXRW-BLKDT>-1>	; Retype buffer size in characters
+
+; Following are flags used in the retype buffer
+; LEFT HALF
+LITRF=400000		; Literal retype - do not include non-standard
+			; defaults for Device and Directory
+DEVRF=200000		; Non-std default Device - not in retype buffer
+DIRRF=100000		; Non-std default Directory - not in retype buffer
+USRTY=040000		; User requested copy of typescript (long GTJFN)
+USRPR=020000		; User supplied prompt for insertion in retype
+
+; RIGHT HALF
+BRDEL=400000		; On means break if try to delete past input start
+MAX6F=100000		; On means names le 6 and ext le 3 chars (not imp)
+TPCNF=040000		; On means return confirmation message with typescript
+
+; Flags used in DECBUF routine (returned in LH of decremented char)
+CTVCHR=400000		; Deleted char was quoted
+FILTDN=200000		; FILTMP was empty when deleting this char
+
+TTYDV=12		; Device code for TTY
+NDIG=6			; Max number of digits in prot and acct
+
+	>
+
+; Table of byte pointers for getting character class
+
+CCSIZE==:5			; Width of character class field
+CCBPW==:^D36/CCSIZE
+
+	RADIX ^D10
+
+Q==CCSIZE-1
+
+CPTAB::	REPEAT ^D36/CCSIZE,<
+	POINT CCSIZE,CCTAB(B),Q
+Q==Q+CCSIZE>
+
+	RADIX 8
+
+; Character classification table
+
+DEFINE	CCN(C,N)<
+	REPEAT N,<CC1(C)>>
+
+DEFINE	CC1(C)<
+QQ==QQ+CCSIZE
+IFG QQ-^D35,<
+	QW
+QW==0
+QQ==CCSIZE-1>
+QW==QW+<C>B<QQ>>
+
+QQ==-1
+QW==0
+
+CCTAB:	CC1(17)			; Null
+	CC1(2)			; Control-a
+	CCN 17,4		; Control-b to e
+	CC1(3)			; Control-f
+	CCN 17,2		; Control-g & h
+	CCN 7,2			; Control-i, j
+	CC1(17)			; Control-k
+	CCN 7,2			; Control-l, m (ff carret)
+	CCN 17,4		; Control-n - q
+	CC1(4)			; Control-r
+	CCN 17,3		; Control-s, t, u
+	CC1(16)			; Control-v
+	CC1(5)			; Control-w
+	CC1(6)			; Control-x
+	CCN 17,2		; Control-y & z
+	CC1(10)			; Alt-mode
+	CCN 17,3		; 34-36
+	CC1(7)			; Eol
+	CC1(7)			; Space
+IFE SMXGTJ,<
+	CCN 0,9			; ! to )
+	>
+IFN SMXGTJ,<
+	CCN 0,4			; ! to $
+	CC1(20)			; %
+	CCN 0,4			; & to )
+	>
+	CC1(20)			; Asterisk
+	CC1(0)			; +
+	CC1(7)			; Comma
+	CC1(30)			; -
+	CC1(14)			; Dot
+	CC1(0)			; Slash
+	CCN 21,12		; Digits
+	CC1(11)			; Colon
+	CC1(15)			; Semi-colon
+	CC1(12)			; <
+	CC1(0)			; =
+	CC1(13)			; >
+	CC1(31)			; ?
+	CC1(7)			; @
+	CC1(24)			; A
+	CCN 0,16		; B - O
+	CC1(23)			; P
+IFE SMXGTJ,<
+	CCN 0,3			; Q - S
+	>
+IFN SMXGTJ,<
+	CCN 0,2			; Q - R
+	CC1(32)			; S
+	>
+	CC1(22)			; T
+	CCN 0,6			; U - z
+	CCN 0,4			; [\]^
+	CC1(7)			; _
+	CC1(17)			; Acute accent
+	CC1(27)			; Lower case a
+	CCN 1,16		; Lower case b - o
+	CC1(26)			; Lower case p
+IFE SMXGTJ,<
+	CCN 1,3			; Lower case q - s
+	>
+IFN SMXGTJ,<
+	CCN 1,2			; Lower case q - r
+	CC1(33)			; Lower case s
+	>
+	CC1(25)			; Lower case t
+	CCN 1,6			; Lower case u - z
+	CCN 17,4		; Curly brackets vert bar complement
+IFN IMSSS+SUMEX,<
+	CC1(2)	>		; Rubout - AS CTRL A
+IFE IMSSS+SUMEX,< CC1(17) >
+
+	QW
+
+.GTJFN::JSYS MENTR		; Enter slow code
+	MOVE E,A		; Set pointer to parameter block
+	TLNE E,777777		; Lh is non-zero?
+	HRRI E,1		; Point to ac's
+	XCTUU [HLLZ F,0(E)]	; Get flags from user
+	SETZB F1,STS		; Clear f1 & sts
+IFN SMXGTJ,<
+	TEST(NN,TMPFF)		; Temp file requested?
+	TEST(O,SCRF)		; No, use regular defaulting
+	>
+	TEST(NE,NACCF)
+	TEST(O,FRKF)
+	TLNE E,2		; Is 2 a pointer
+	JRST GTJFZ		; No, skip the following
+	XCTUU [HLRZ A,2]	; Get lh of byte pointer
+	HRLZI B,(<POINT 7,0>)
+	TRNN A,777777
+	XCTUU [SETZM 2]		; Clear pointer if lh = 0
+	CAIN A,777777
+	XCTUU [HLLM B,2]	; Put 7 bit byte into lh if -1
+	CAIE A,0		; Does string pointer exist?
+	TEST(OA,STRF)		; Yes it does
+GTJFZ:	TEST(Z,STRF)		; No it does not
+	PUSHJ P,INFTST
+	JRST GTJFZ1
+	RFCOC
+	PUSH P,B
+	PUSH P,C
+	RFMOD
+	PUSH P,B
+	PUSH P,A
+	TRZ B,777700
+	IORI B,164100
+	SFMOD
+	PUSHJ P,SFCC0
+GTJFZ1:	TLNN E,777777		; Can't specify jfn if short form
+	TEST(NN,JFNF)		; Is user trying to specify jfn?
+	JRST GTJF1		; No.
+	XCTUU [SKIPL JFN,10(E)]	; Yes, get his version of jfn
+	CAIL JFN,MJFN
+	JRST	[MOVEI A,GJFX1
+		 JRST ERRDO1 ]
+IFN SMXGTJ,<
+	CAIE JFN,100		; Can't specify primary I/O jfn's
+	CAIN JFN,101
+	JRST	[MOVEI A,GJFX1
+		 JRST ERRDO1 ]
+	>
+GTJFZ2:
+
+	NOINT
+	LOCK JFNLCK
+	CAML JFN,MAXJFN		; Above currently available jfn's?
+	 JRST [	PUSH P,JFN	; Yes, sve this
+		MOVE JFN,MAXJFN
+		AOS MAXJFN
+		LSH JFN,SJFN
+		PUSHJ P,RELJF2
+		POP P,JFN
+		JRST GTJFZ2]
+	LSH JFN,SJFN
+	SKIPN FILSTS(JFN)	; Is this jfn free?
+	JRST [	PUSHJ P,ASGJF1	; Yes, assign it
+		JRST GTJF0]
+	UNLOCK JFNLCK
+	OKINT
+	TEST(NN,JFNAF)
+	JRST	[MOVEI A,GJFX2
+		 JRST ERRDO1]
+GTJF1:	PUSHJ P,ASGJFN
+	ERR(GJFX3)		; Jfn not available
+GTJF0:	PUSHJ P,SETTMP		; Set up temporary string block
+IFE SMXGTJ,<
+GTJF2:	PUSHJ P,GCH		; Get next character
+	JRST ENDALL		; No more input
+	TEST(ZE,CNTVF)		; Control-v pending?
+	JRST [	PUSHJ P,UCCH	; Yes, ignore any special meanings
+		JRST GTJF2]
+	MOVE B,A
+	IDIVI B,^D36/CCSIZE	; Prepare to get character class
+	LDB B,CPTAB(B+1)	; Get character class
+	CAIL B,ECHDTB-CHDTB
+	ERRLJF GJFX4,<MOVEM A,ERRSAV>
+	>	; End of IFE SMXGTJ conditional
+
+IFN SMXGTJ,<
+	PUSHJ P,SETRTP		; Set up retype buffer
+GTJF2:	TEST(Z,NREC)		; Turn recognition back on
+	PUSHJ P,GCH		; Get next character
+	JRST ENDALL		; No more input
+	ANDI A,177		; Only can have 7 bits
+	TEST(ZE,CNTVF)		; Control-v pending?
+	JRST [	PUSHJ P,UCCH	; Yes, ignore any special meanings
+		PUSHJ P,RTPCH	; Add this char to the retype buffer
+		JRST GTJF2]
+	MOVE B,A
+	IDIVI B,^D36/CCSIZE	; Prepare to get character class
+	LDB B,CPTAB(B+1)	; Get character class
+	CAIL B,ECHDTB-CHDTB
+	ERRLJF GJFX4,<MOVEM A,ERRSAV>
+	PUSH P,B		; Save dispatch index
+	CAILE B,1		; If LC or UC letter
+	CAILE B,10		; and not ^A to esc
+	 JRST   [CAIE B,31	; and not ?
+		  PUSHJ P,RTPCH	; Add char to retype buffer
+		 JRST .+1]
+	POP P,B
+	>	;End of IFN SMXGTJ conditional
+
+	XCT CHDTB(B)		; Execute the dispatch table
+	JRST GTJF2		; Most action characters return here
+	JRST GTJF2		; Some things skip for other reasons
+
+; Character dispatch table
+
+CHDTB:	PUSHJ P,UCCH		; (0) upper case letter
+	PUSHJ P,LCCH		; (1) lower case letter
+	PUSHJ P,DLCHR		; (2) cont-a
+	PUSHJ P,RECFLD		; (3) cont-f
+	PUSHJ P,RETYPE		; (4) cont-r
+	PUSHJ P,DELFLD		; (5) cont-w
+	PUSHJ P,DELALL		; (6) cont-x
+	JRST ENDALL		; (7) cr, lf, ff, tab, _, ,, space, eol
+	JRST RECALL		; (10) alt-mode
+	PUSHJ P,ENDDEV		; (11) colon
+	PUSHJ P,BEGDIR		; (12) <
+	PUSHJ P,ENDDIR		; (13) >
+	PUSHJ P,ENDNAM		; (14) .
+	PUSHJ P,ENDEXT		; (15) ;
+	TEST(O,CNTVF)		; (16) control-v
+	ERRLJF GJFX4,<MOVEM A,ERRSAV>	; (17) illegal character
+	PUSHJ P,STAR	; (20) asterisk
+	PUSHJ P,DIGIT		; (21) digits
+	PUSHJ P,TCHK		; (22) t
+	PUSHJ P,PCHK		; (23) p
+	PUSHJ P,ACHK		; (24) a
+	PUSHJ P,LCTCH		; (25) lower case t
+	PUSHJ P,LCPCH		; (26) lower case p
+	PUSHJ P,LCACH		; (27) lower case a
+	PUSHJ P,MINUS		; (30) minus sign
+IFE SMXGTJ,<
+	ERRLJF(GJFX34)		; (31) ?
+	>
+IFN SMXGTJ,<
+	PUSHJ P,QUEST		; (31) ?
+	PUSHJ P,SCHK		; (32) S
+	PUSHJ P,LCSCH		; (33) s
+	>
+ECHDTB:
+
+; Continuation of gtjfn code
+
+; Digits
+
+DIGIT:	
+IFN SMXGTJ,<
+	TEST (Z,KEYFF)		; Can't be a key letter anymore
+	>
+	MOVE C,FILCNT(JFN)
+	CAIGE C,MAXLC-7		; String longer than 7 digits
+	JRST UCCH
+	TEST(NE,OCTF)
+	CAIGE A,"8"
+	TEST(NN,NUMFF)		; Or not collecting number
+	JRST UCCH		; Treat as letter
+	MOVEI B,12
+	TEST(NE,OCTF)
+	MOVEI B,10
+	IMUL NUM,B		; Otherwise collect number
+	TEST(NN,NEGF)
+	ADDI NUM,-60(A)
+	TEST(NE,NEGF)
+	SUBI NUM,-60(A)
+	JRST LTR		; Also pack into string
+
+; Simple characters
+
+LCCH:	SUBI A,40		; Convert lower case to upper
+UCCH:
+IFE SMXGTJ,<
+	TEST(Z,NUMFF)		; Number is invalid now
+LTR:	TEST(NE,STARF)
+	ERRLJF GJFX31
+	>
+IFN SMXGTJ,<
+	TEST(Z,NUMFF,KEYFF)	; Number and key letter are invalid now
+LTR:
+	>
+	SOSGE FILCNT(JFN)
+	ERRLJF GJFX5		; String too long
+	IDPB A,FILOPT(JFN)	; Append character to string
+	POPJ P,
+
+; Letter a
+
+ACHK:	TEST(ZN,KEYFF)		; Are we looking for a key letter?
+	JRST UCCH		; No. treat same as other letter
+ACH1:	TEST(NE,ACTF)		; Already have account?
+	ERRLJF GJFX12		; Yes. syntax error
+	TEST(O,ACTFF,NUMFF)	; We are now collecting account number
+	POPJ P,
+
+LCACH:	TEST(ZN,KEYFF)		; Same as for upper case a above
+	JRST LCCH
+	JRST ACH1
+
+; Letter p
+
+PCHK:	TEST(ZN,KEYFF)		; Are we looking for key letter?
+	JRST UCCH		; No. treat as for letter
+PCH1:	TEST(NE,PRTF)		; Already have protection?
+	ERRLJF GJFX13		; Yes, illegal syntax
+	TEST(O,PRTFF,NUMFF)
+	TEST(O,OCTF)
+	POPJ P,
+
+LCPCH:	TEST(ZN,KEYFF)
+	JRST LCCH
+	JRST PCH1
+
+; Letter t
+
+TCHK:
+IFE SMXGTJ,<
+	TEST(NN,KEYFF)		; Looking for key?
+	JRST UCCH		; No. treat as letter
+TCH1:	TEST(O,TMPFF)		; Yes. set temp file flag
+	POPJ P,
+	>
+IFN SMXGTJ,<
+	TEST(ZN,KEYFF)		; Looking for key?
+	JRST UCCH		; No. treat as letter
+TCH1:	TEST(Z,SCRTF)		; Clear scratch flag if on
+	TEST(Z,SCRF)		; and scratch version defaulting flag
+	TEST(NE,VERF)		; Already have version?
+	 JRST [HRRZ A,FILVER(JFN)	; Is it really above 100000?
+	       CAIG A,^D100000
+	        JRST SCH1	; No, make this a scratch file
+	       JRST .+1]	; OK, leave it temp
+	TEST(O,TMPFF)		; Yes. set temp file flags
+	TEST(O,TMPTF)
+	TEST(O,TSFF)		; And say we just got it
+	POPJ P,
+	>
+
+LCTCH:
+IFE SMXGTJ,<
+	TEST(NN,KEYFF)
+	>
+IFN SMXGTJ,<
+	TEST(ZN,KEYFF)
+	>
+	JRST LCCH
+	JRST TCH1
+
+
+IFN SMXGTJ,<
+; Letter S
+
+SCHK:	TEST(ZN,KEYFF)		; Looking for key?
+	JRST UCCH		; No. treat as letter
+SCH1:	TEST(Z,TMPTF)		; Clear temporary flag if on
+	TEST(NE,VERF)		; Already have version?
+	 JRST [HRRZ A,FILVER(JFN)	; Is it really below 100000?
+	       CAILE A,^D100000
+	        JRST TCH1	; No, make this a temp file
+	       JRST .+1]	; OK, leave it temp
+	TEST(O,TMPFF,SCRF)	; Yes. set scratch file flags
+	TEST(O,SCRTF)
+	TEST(O,TSFF)		; And say we just got it
+	POPJ P,
+
+LCSCH:	TEST(ZN,KEYFF)
+	JRST LCCH
+	JRST SCH1
+	>
+
+; Minus sign
+
+MINUS:	JUMPN NUM,UCCH		; If any number has been typed
+	TEST(OE,NEGF)
+	JRST UCCH		; Or 2 minus signs, treat as letter
+	JRST LTR
+
+; Device name terminator (:)
+; The string in the block addressed by tmpptr
+; Is taken as a device. if the device exists, the string is saved
+; As the device name for this file.
+; Exits with tmpptr reset to a null string
+
+ENDDEV:	TEST(NE,STARF)
+	ERRLJF GJFX31
+	TEST(OE,DEVF)
+	ERRLJF GJFX6		; Device already specified (syntax)
+	PUSHJ P,ENDSTR		; Terminate string, get lookup pointer
+	PUSHJ P,DEVLUK		; Lookup device in device tables
+	ERRLJF()		; No such device
+	MOVEM DEV,FILDEV(JFN)	; Value of lookup is initial fildev
+	PUSHJ P,ENDTMP		; Truncate block
+	HRLM A,FILDDN(JFN)	; Store as device name
+	OKINT
+	TEST(O,DEVTF)		; Remember that device was typed in
+	JRST SETTMP		; Reset temp block and return
+
+; Directory name prefix (<)
+; Sets dirff to remember that we are getting a directory name
+
+BEGDIR:	TEST(NN,DIRF)		; Already have directory?
+	TEST(OE,DIRFF)		; Or currently gettin one
+	ERRLJF GJFX7		; Yes. syntax error
+IFN SMXGTJ,<
+	MOVE C,FILCNT(JFN)	; Bracket must be first in field
+	CAIE C,MAXLC
+	 ERRLJF GJFX7
+	>
+	POPJ P,
+
+; Directory terminator (>)
+; The string in tmpptr is taken as a directory name.
+; If recognized, the corresponding directory number is saved
+; As the directory number for this file.
+; Exits with tmpptr reset to null
+
+ENDDIR:	TEST(ZE,DIRFF)		; Were we collecting it?
+	TEST(OE,DIRF)		; And do we not yet have it?
+	ERRLJF GJFX8		; No. error in syntax
+	TEST(NN,DEVF)		; Do we have a device yet?
+	PUSHJ P,DEFDEV		; No. default it first
+	TEST(ZE,STARF)
+IFE SMXGTJ,<
+	JRST STRDIR		; User typed <*>
+	>
+IFN SMXGTJ,<
+	JRST   [TEST(NN,ASTAF,OSTRF)  ; User typed wild card - allowed?
+		 ERRLJF GJFX31	      ; No
+		JRST STRDIR]	      ; OK, handle it
+	>
+	PUSHJ P,ENDSTR		; Terminate string, get lookup pointer
+	PUSHJ P,DIRLKX		; Lookup directory (no recognition)
+	JFCL
+	ERRLJF GJFX17		; No such directory
+ENDDI1:	HRRM A,FILDDN(JFN)	; Save directory number
+	TEST(O,DIRTF)		; Remember that directory was typed in
+	JRST SETTMP		; Reset temp block and return
+
+IFE SMXGTJ,<
+STRDIR:	TEST(O,DIRSF)
+	MOVEI A,1
+	JRST ENDDI1
+	>
+
+IFN SMXGTJ,<
+STRDIR:	TEST(O,DIRSF,STEPF)	; Wild card and step to 1st one
+	PUSHJ P,PRPWC		; Preserve quoted wild cards and trim FILTMP
+	HRLM A,FILDNW(JFN)	; Save template for later
+	OKINT
+	MOVEI A,0		; First try
+	PUSHJ P,@DLUKD(DEV)	; Find acceptable candidate
+	 JFCL
+	 ERRLJF GJFX17		; None there
+	PUSHJ P,USTDIR		; Release directory
+	TEST(Z,STEPF)		; Done stepping
+	JRST ENDDI1		; And save the result
+
+
+; Routine to recreate a wild card string from the retype buffer preserving
+; quoted wild card characters with preceeding ^V's.
+; Entry:  FILTMP and FILOPT point to end of current input string
+;	  Retype buffer contains true typein (with ^V's)
+; Call:	PUSHJ P,PRPWC
+; Returns: Updated trimmed wild card string in block previously in FILTMP
+;	   A = address of string block
+;	   RH FILTMP is cleared
+;	   PSI off
+; Clobbers A,B,C,D
+
+PRPWC:	HRRZ A,FILEXW(JFN)	; Save retype buffer context
+	PUSH P,BLKBP(A)
+	PUSH P,BLKCT(A)
+	PUSH P,USRBP(A)
+	PUSH P,USRCT(A)
+	PUSH P,NUM
+	PUSH P,BLKBP(A)		; Save terminating pointer
+
+	PUSHJ P,DECBUF		; Decrement the buffer once
+	 ERRLJF GJFX31		; Can't be here with no chars at all
+	JUMPL A,PRPWC0		; If quoted, can't be delimiter
+	HRRZ B,A		; May be delim - compute type
+	IDIVI B,^D36/CCSIZE
+	LDB B,CPTAB(B+1)
+	CAIL B,13		; Between right brack and ;?
+	CAILE B,15
+	 JRST PRPWC0		; No leave things as is
+	HRRZ A,FILEXW(JFN)	; Delimiter - update terminator ptr
+	MOVE B,BLKBP(A)
+	MOVEM B,0(P)
+	SOS FILCNT(JFN)		; And bring FILTMP back in synch
+	IBP FILOPT(JFN)
+
+PRPWC0:	PUSHJ P,DECBUF		; Decrement the buffer once
+	 JRST PRPWC1		; No more either in retype or FILTMP
+	TLZN A,FILTDN		; FILTMP empty?
+	 JRST PRPWC0		; No, do another character
+	HRRZ B,FILEXW(JFN)	; FILTMP done but retype not
+	IBP BLKBP(B)		; Bring retype back to start of field
+PRPWC1:	PUSHJ P,SETTMP		; Reset ptrs for FILTMP to start
+	HRRZ B,FILEXW(JFN)	; And set up starting retype ptr
+	MOVE B,BLKBP(B)
+
+PRPWC2:	ILDB A,B		; Copy until we get a 0
+	TEST(ZN,CNTVF)		; ^V hit?
+	 JRST   [CAIN A,<"V"-100>  ; No, is this ^V?
+		  TEST(O,CNTVF)	   ; Yes, set flag
+		 ANDI A,177	   ; Do case conversion
+		 CAIL A,"a"
+		 CAILE A,"z"
+		  JRST .+1
+		 SUBI A,"a"-"A"
+		 JRST .+1]
+	PUSHJ P,LTR		; Not yet, store this one
+	CAME B,0(P)		; End of string yet?
+	 JRST PRPWC2		; No, do another character
+
+	TEST(Z,CNTVF)		; No more ^V's
+	SUB P,[1,,1]		; Remove terminator from stack
+	POP P,NUM		; Now restore context
+	HRRZ A,FILEXW(JFN)
+	POP P,USRCT(A)
+	POP P,USRBP(A)
+	POP P,BLKCT(A)
+	POP P,BLKBP(A)
+	PUSHJ P,ENDTMP		; Terminate new FILTMP with adr in A
+	POPJ P,
+
+	>	; End of IFN SMXGTJ conditional
+
+
+; Name terminator (.)
+; The string in tmpptr is taken as a file name.
+; If found, the string is saved as the file name of this file.
+; Exits with tmpptr reset to null
+
+ENDNAM:	TEST(OE,NAMF)		; Do we already have a name?
+	ERRLJF GJFX9		; Yes. syntax error
+	TEST(NN,DIRF)		; Do we have a directory yet?
+	PUSHJ P,DEFDIR		; No. default it
+	TEST(ZE,STARF)
+IFE SMXGTJ,<
+	JRST STRNAM
+	>
+IFN SMXGTJ,<
+	JRST   [TEST(NN,ASTAF,OSTRF)   ; User typed wild card - allowed?
+		 ERRLJF GJFX31         ; No
+		JRST STRNAM]	       ; OK, handle it
+	>
+	PUSHJ P,ENDSTR		; Terminate string, get lookup pointer
+	PUSHJ P,NAMLKX		; Look up name without recognition
+	JRST ERRDO		; No such file name
+	JRST ERRDO
+	PUSHJ P,ENDTMP		; Truncate temp block
+ENDNA1:	HRLM A,FILNEN(JFN)	; Save as file name
+	OKINT
+	TEST(O,NAMTF)
+	TEST(O,EXTFF)
+	JRST SETTMP		; Reset temp block and return
+
+STRNAM:	TEST(O,NAMSF,STEPF)
+IFN SMXGTJ,<
+	PUSHJ P,PRPWC		; Got wild card, pres ^V's and trim it
+	HRRM A,FILDNW(JFN)	; And save it
+	OKINT
+	PUSHJ P,SETTMP		; Get another temp for 1st match
+	>
+	SETZ A,
+	PUSHJ P,NAMLKX
+	 JRST ERRDO
+	 JRST ERRDO
+STRNA1:	HRRZ A,FILTMP(JFN)
+	NOINT
+	HLLZS FILTMP(JFN)
+	JRST ENDNA1
+
+; Semicolon
+; Control comes here when a semicolon appears in the input
+; Input preceding the semicolon may be:
+; 1. a file name if no name has yet been input
+; 2. an extension if a name has been input, but no extension
+; 3. a protection if neither 1 or 2, and the field was started with p
+; 4. a version number if neither 1,2, or 3 and input was numeric
+; 5. an account number/string if field was preceded by an a
+; Exits with tmpptr reset to null, and keyff=1, numff=1,
+
+ENDEXT:	TEST(NN,NAMF)		; Do we have a name yet?
+	PUSHJ P,ENDNAM		; No. take input string as name
+	TEST(OE,EXTF)		; Do we have an extension yet?
+	JRST ENDEX1		; Yes
+	TEST(ZE,STARF)
+IFE SMXGTJ,<
+	JRST STREXT
+	>
+IFN SMXGTJ,<
+	JRST   [TEST(NN,ASTAF,OSTRF)   ; User typed wild card - allowed?
+		 ERRLJF GJFX31	       ; No
+		JRST STREXT]	       ; OK, handle it
+	>
+	PUSHJ P,ENDSTR		; No, terminate, get lookup pointer
+	PUSHJ P,EXTLKX		; Lookup extension without recognition
+	JRST ERRDO		; No extension
+	JRST ERRDO
+	PUSHJ P,ENDTMP		; Truncate temp block
+ENDEX6:	HRRM A,FILNEN(JFN)	; Store as file extension
+	OKINT
+	TEST(O,EXTTF)		; Remember that extension was typed in
+	TEST(Z,EXTFF)
+ENDEX0:	TEST(O,KEYFF,NUMFF)	; Looking for key letters or numbers
+	TEST(Z,OCTF)
+	JRST SETTMP		; Reset temp block and return
+
+ENDEX1:	
+IFN SMXGTJ,<
+	TEST(ZE,TSFF)		; Were we collecting ;T/;S
+	 JRST	[MOVE B,FILCNT(JFN)	; Yes, no other chars allowed here
+		 CAIE B,MAXLC
+		  ERRLJF GJFX10
+		 TEST(NE,STARF)		; Or stars
+		  ERRLJF GJFX31
+		 JRST ENDEX0]	; OK, carry on
+	>
+	TEST(ZN,PRTFF)		; Were we collecting a protection
+	JRST ENDEX2		; No
+IFN SMXGTJ,<
+	TEST(NE,STARF)		; Any stars input?
+	 ERRLJF GJFX31		; Illegal
+	>
+	SKIPL NUM		; Negative numbers are illegal
+	TEST(NN,NUMFF)		; Must be number for now
+	ERRLJF GJFX14		; Illegal protection
+	TLO NUM,500000
+	MOVEM NUM,FILPRT(JFN)
+	TEST(O,PRTF,PRTTF)	; Have a protection and it was typed
+	JRST ENDEX0
+
+IFE SMXGTJ,<
+STREXT:	TEST(O,EXTSF,STEPF)
+	>
+IFN SMXGTJ,<
+STREXT:	PUSHJ P,PRPWC		; Got wild card, pres ^V's and trim it
+	HRLM A,FILEXW(JFN)	; And save it
+	OKINT
+	PUSHJ P,SETTMP		; Get another temp for 1st match
+STREX0:	TEST(O,EXTSF,STEPF)
+	>
+	SETZ A,
+	PUSHJ P,EXTLKX
+	JRST ERRDO
+	JRST ERRDO
+	HRRZ A,FILTMP(JFN)
+	NOINT
+	HLLZS FILTMP(JFN)
+	JRST ENDEX6
+
+ENDEX2:	TEST(ZN,ACTFF)		; Were we collecting an account
+	JRST ENDEX5		; No
+IFN SMXGTJ,<
+	TEST(NE,STARF)		; Any stars entered?
+	 ERRLJF GJFX31		; That's a no-no
+	>
+	SKIPL NUM		; Positive number and
+	TEST(NN,NUMFF)		; Was a number typed?
+	JRST ENDEX3		; No
+	TLO NUM,500000
+	MOVEM NUM,FILACT(JFN)	; Yes, save its negative
+	JRST ENDEX4
+
+ENDEX3:	HRRO A,CAPENB
+	TRNN A,WHEEL!OPR
+	MOVE A,MODES
+	TLNN A,(1B1)
+	ERRLJF(GJFX30)
+	PUSHJ P,ENDSTR		; Account is a string
+	PUSHJ P,ENDTMP
+	MOVEM A,FILACT(JFN)	; Save positive account block pointer
+	OKINT
+ENDEX4:	TEST(O,ACTF,ACTTF)
+	JRST ENDEX0
+
+ENDEX5:	TEST(NN,NUMFF)		; Was a number input?
+	ERRLJF GJFX10
+IFE SMXGTJ,<
+	TEST(OE,VERF)		; And do we not yet have a version?
+	>
+IFN SMXGTJ,<
+	TEST(NE,VERF)		; And do we not yet have a version?
+	>
+	ERRLJF GJFX11		; No. syntax error
+	TEST(ZE,STARF)
+IFE SMXGTJ,<
+	JRST STRVER
+	>
+IFN SMXGTJ,<
+	JRST   [MOVE C,FILCNT(JFN)	; If * typed, must be only one
+		CAIGE C,MAXLC-1
+	 	 ERRLJF GJFX31		; No
+		JRST STRVER]		; OK, handle it
+	>
+	SKIPN A,NUM
+	TEST(O,RVERF)
+	CAMN A,[-1]
+	TEST(O,HVERF)
+	CAMN A,[-2]
+	TEST(O,LVERF)
+	CAMN A,[-3]
+	JRST STRVER
+IFE SMXGTJ,<
+	PUSHJ P,VERLUK		; Lookup this version
+	ERRLJF GJFX20		; No such version
+STRVR1:	HRRM A,FILVER(JFN)
+	TEST(O,VERTF)		; Remember that version was input
+	JRST ENDEX0
+
+STRVER:	TEST(O,VERSF,STEPF)
+	SETZ A,
+	PUSHJ P,VERLUK
+	ERRLJF(GJFX20)
+	JRST STRVR1
+	>
+IFN SMXGTJ,<
+ENDEX7:	PUSHJ P,GTVER		; Go find an accessible version
+	 ERRLJF(GJFX20)		; Oops
+	JRST ENDEX0		; Got one, process next field
+
+STRVER:	TEST(NN,ASTAF,OSTRF)	; User typed wild card - allowed?
+	 ERRLJF GJFX31		; No
+	TEST(NN,NNAMF,NVERF)	; No stars for no name/ver devices
+	TEST(O,VERSF,STEPF)	; Note * version
+	SETZ A,			; And find first example
+	JRST ENDEX7
+
+
+; Routine to locate a file version with acceptable access privileges
+;  On entry:
+;     AC 1 = desired version specification
+;     JFN, F, F1, DEV, and STS are set up appropriately
+;
+;  On return:
+;     +1 - Error, no accessible found
+;     +2 - Success
+;     		AC 1 = file version number
+;	 	   2 = FDB ctl bits
+;
+; Access for disk files is based on:
+;   IF NEW file or version, ability to create it checked elsewhere,
+;			    accept it
+;   IF OLD file,
+;      IF NAMSF = TRUE, require PT access in FDB
+;      IF NAMSF = FALSE
+;         IF Login or Connected directory, always allow access
+;         IF any other directory, require some access bit on in
+;	     appropriate group/other field
+
+GTVER:	HRRZ B,NLUKD(DEV)	; Is this a multi directory device?
+	CAIN B,MDDNAM
+	 JRST GTVER1		; Yes
+	PUSHJ P,VERLUK		; No, don't bother leaving it locked
+	 POPJ P,		; Couldn't find it - return +1
+	SETZ B,			; Got it, clear ctl bits
+GTVER0:	TEST(O,VERF,VERTF)	; Show version found
+	HRRM A,FILVER(JFN)	; Install version
+	JRST SKPRET		; And return +2
+
+GTVER1:	PUSHJ P,VERLKX		; Lookup requested version - return FDB
+	 POPJ P,		; Couldn't get one - return +1
+	TEST(NE,ASTF)		; If output stars, nothing really done
+	 JRST GTVER0		; Save the version and return
+	PUSH P,FDBCTL(A)	; Got one, save the FDB ctl bits
+	PUSH P,FDBVER(A)	; And save the version number
+	TEST(NE,NEWF,NEWVF)	; New file or version?
+	 JRST GTVER2		; Yes, just take it
+	HRLI A,-1		; No, do access check
+	PUSHJ P,ACCCHK
+	 JRST GTVER3		; Bad news, see if we can try another
+
+GTVER2:	TEST(O,VERF,VERTF)	; Show version found and typed
+	POP P,A			; Recover version number
+	POP P,B			; Recover FDB ctl bits
+	HLRZS A
+	HRRM A,FILVER(JFN)	; And install it
+	PUSHJ P,USTDIR		; OK, release the directory
+	JRST SKPRET		; And return +2
+
+GTVER3:	PUSHJ P,USTDIR		; Invalid access, release directory
+	POP P,A			; recover this version number
+	HLRZS A
+	SUB P,[1,,1]		; And clear ctl bits from stack
+	TLNN F1,DIRSF!NAMSF!EXTSF!VERSF	; Stepping anything?
+	 POPJ P,		; No, return +1
+	TEST(O,STEPF)		; Yes, step to the next file
+	TEST(NE,RVERF)		; after installing right target version
+	 MOVEI A,0
+	TEST(NE,HVERF)
+	 MOVEI A,-1
+	TEST(NE,LVERF)
+	 MOVEI A,-2
+	JRST GTVER		; Now go try it
+	>
+
+; Default device
+; Call:	PUSHJ P,DEFDEV
+; Return
+;	+1	; Always
+; Gets default device string from user or "dsk"
+; And stores as the device for the file given in jfn
+; Clobbers a,b,c,d
+
+DEFDEV:	TLNN E,777777		; No defaults if short form
+	XCTUU [SKIPN A,2(E)]	; Get user's default pointer
+	JRST DEFDV1		; None specified, use dsk
+	PUSHJ P,REDFLT		; Copy the default string
+	TEST(ZE,DFSTF)
+	JRST [	MOVEI A,GJFX31
+		JRST ERRDO]
+	PUSHJ P,DEVLUK		; Lookup device
+	ERRLJF()		; None such
+	MOVEM DEV,FILDEV(JFN)
+	NOINT
+	HLRZ A,FILTMP(JFN)
+	HRRZS FILTMP(JFN)
+	HRLM A,FILDDN(JFN)
+	OKINT
+IFN SMXGTJ,<
+	MOVE B,1(A)		; Get the device string
+	CAME B,[ASCIZ /DSK/]	; Is it disk?
+	 JRST   [RTPFLG(DEVRF)	; Set non-std retype flag
+		 TEST(NE,NREC)	; Recognition allowed?
+		  JRST .+1	; No, don't try to type anything
+		 MOVE C,FILCNT(JFN)  ; Any other input now?
+		 CAIL C,MAXLC
+		 TEST(NE,NAMF,DIRF)  ; Or do we have a name or directory?
+		 JRST .+1	     ; Yes, can't print non-std device
+		 HRRZ B,FILEXW(JFN)  ; All clear, turn off non-std flag
+		 MOVSI C,DEVRF
+		 ANDCAM C,BLKFG(B)
+		 HLRZ B,FILDDN(JFN)  ; Print the device now
+		 PUSHJ P,TSTRB
+		 CHOUT(":")
+		 HLRZ A,FILDDN(JFN)  ; And to the retype buffer
+		 PUSHJ P,RTSTRB
+		 CHRTP(":")
+		 JRST .+1]
+	>
+	TEST(O,DEVF)
+	POPJ P,
+
+DEFDV1:	MOVEI B,2		; Need two words
+	NOINT
+	PUSHJ P,ASGJFR		; Of job storage
+	ERRLJF GJFX22		; No space available
+	HRLM A,FILDDN(JFN)	; The block is for the device name
+	OKINT
+	MOVE B,[ASCIZ /DSK/]
+	MOVEM B,1(A)		; The device is "dsk"
+	PUSHJ P,DEVLUK
+	ERRLJF()		; Dsk should always exist
+	MOVEM DEV,FILDEV(JFN)
+	TEST(O,DEVF)
+	POPJ P,
+
+; Default directory
+; Call:	JFN
+;	PUSHJ P,DEFDIR
+; Returns
+;	+	; If successful
+; Does not return if unsuccesfull
+; Clobbers a,b,c,d
+
+DEFDIR:	TEST(NN,DEVF)
+	PUSHJ P,DEFDEV
+	TLNN E,777777		; No default if short form
+	XCTUU [SKIPN A,3(E)]	; Get default pointer
+	JRST DEFDI1		; None specified
+	PUSHJ P,REDFLT		; Copy default string
+	TEST(ZE,DFSTF)
+IFE SMXGTJ,<
+	JRST STRDIR
+	>
+IFN SMXGTJ,<
+	JRST DEFDI3		; Wild card
+	>
+	PUSHJ P,DIRLKX		; Look it up
+	JFCL
+	ERRLJF GJFX17		; None such
+DEFDI0:	HRRM A,FILDDN(JFN)
+IFE SMXGTJ,<
+	MOVEI A,JSBFRE
+	NOINT
+	HLRZ B,FILTMP(JFN)
+	 SKIPE B		; If there is one there
+	PUSHJ P,RELFRE		; Release the block
+	HRRZS FILTMP(JFN)
+	OKINT
+	>
+	TEST(O,DIRF)
+IFN SMXGTJ,<
+	PUSHJ P,RELTMP		; Release temporary store
+	HRRZ A,FILDDN(JFN)	; Get the specified directory number
+	MOVE B,JOBNO		; If it is the login or connected
+	HRRZ B,JOBDIR(B)
+	CAME A,JOBDNO
+	CAMN A,B
+	 POPJ P,		; Forget it
+	RTPFLG(DIRRF)		; Otherwise, set non-std retype flag
+	TEST(NE,NREC)		; Recognition allowed?
+	 POPJ P,		; No, don't try typing the directory
+	MOVE C,FILCNT(JFN)  	; Any other input now?
+	CAIL C,MAXLC
+	TEST(NE,NAMF)		; Or do we have a name already?
+	POPJ P,			; Yes, can't print non-std directory
+	HRRZ B,FILEXW(JFN)	; OK, turn off non-std flag
+	MOVSI C,DIRRF
+	ANDCAM C,BLKFG(B)
+	CHOUT (74)		; And print it now
+	CHRTP(74)		; And in the retype buffer
+	TEST(NE,DIRSF)		; Wild card?
+	 JRST   [HLRZ B,FILDNW(JFN)   ; Yes print it
+		 PUSHJ P,TSTRB
+		 HLRZ A,FILDNW(JFN)
+		 PUSHJ P,RTSTRB
+		 JRST DEFDI2]	; And finish it
+	PUSHJ P,GDNAME		; No wild card, get the dir name string
+	 JRST DEFDI2		; Couldn't find it - shouldn't happen
+	HLRZ B,FILTMP(JFN)	; Print it
+	PUSHJ P,TSTRB
+	HLRZ A,FILTMP(JFN)	; And to retype buffer
+	PUSHJ P,RTSTRB
+	PUSHJ P,RELTMP		; Now release temp temp block
+DEFDI2:	CHOUT (76)		; Finish punctuation
+	CHRTP (76)
+	>
+	POPJ P,
+
+DEFDI1:	MOVE A,JOBDNO		; Get the directory number of login
+	HRRM A,FILDDN(JFN)
+	TEST(O,DIRF)
+	POPJ P,
+
+IFN SMXGTJ,<
+DEFDI3:	TEST(O,DIRSF,STEPF)	; Wild card, step for first match
+	RTPFLG(DIRRF)		; Non-std, force retype if asked
+	NOINT
+	HLRZ A,FILTMP(JFN)	; Save the wild card string
+	HRLM A,FILDNW(JFN)
+	HRRZS FILTMP(JFN)
+	OKINT
+	HRRZ A,DLUKD(DEV)	; Multi dir device?
+	CAIE A,MDDDIR
+	 ERRLJF GJFX17		; Nope
+	MOVEI A,0		; First try
+	PUSHJ P,@DLUKD(DEV)	; go find the first match
+	 JFCL
+	 ERRLJF GJFX17		; None there
+	PUSHJ P,USTDIR		; Got it, release dir
+	TEST(Z,STEPF)		; No more stepping for now
+	JRST DEFDI0		; Go save it
+	>
+
+
+; Default name
+; Call:	JFN, ETC.
+;	PUSHJ P,DEFNAM
+; Return
+;	+1	; No default specified
+;	+2	; If successful, the name specified is set as filnam
+; Does not return if users default does not exist
+; Clobbers a,b,c,d
+
+DEFNAM:	TEST(NN,DIRF)
+	PUSHJ P,DEFDIR
+	TLNN E,777777		; No default for short form
+	XCTUU [SKIPN A,4(E)]	; Get user's default pointer
+	POPJ P,			; None specified
+	PUSHJ P,REDFLT		; Read default string
+	TEST(ZE,DFSTF)
+	JRST DFSTRN
+	PUSHJ P,NAMLKX		; Lookup name
+	JRST [	TEST(NE,NNAMF)
+		POPJ P,
+		JRST ERRDO]
+	JRST ERRDO
+	NOINT
+	HLRZ B,FILTMP(JFN)
+	HRRZS FILTMP(JFN)
+	HRLM B,FILNEN(JFN)
+	OKINT
+	TEST(O,NAMF,NAMTF)
+	AOS (P)
+	TEST(NN,NREC)
+IFE SMXGTJ,<
+	PUSHJ P,TSTRB		; Output the default name
+	>
+IFN SMXGTJ,<
+	JRST   [HLRZ A,FILNEN(JFN)	; Add default name to retype buffer
+		PUSHJ P,RTSTRB
+		HLRZ B,FILNEN(JFN)	; And to output JFN
+		PUSHJ P,TSTRB
+		JRST .+1]
+	>
+	POPJ P,
+
+DFSTRN:	TEST(O,NAMSF,STEPF)
+IFN SMXGTJ,<
+	NOINT
+	HLRZ A,FILTMP(JFN)	; Wild card, save it
+	HRRM A,FILDNW(JFN)
+	HRRZS FILTMP(JFN)	; Show it's gone
+	OKINT
+	PUSHJ P,SETTMP		; Should be free, but make sure
+	>
+	SETZ A,
+	PUSHJ P,NAMLKX
+	 JRST [	TEST(NE,NNAMF)
+		 POPJ P,
+		JRST ERRDO]
+	 JRST ERRDO
+	PUSHJ P,STRNA1
+	TEST(Z,EXTFF)
+	TEST(O,NAMF,NAMTF)
+	TEST(NN,NREC)
+IFE SMXGTJ,<
+	PUSHJ P,TYSTR
+	JRST SKPRET
+	>
+IFN SMXGTJ,<
+	JRST   [HRRZ A,FILDNW(JFN)   ; Add wild card str to retype
+		PUSHJ P,RTSTRB
+		HRRZ B,FILDNW(JFN)   ; And to user output
+		PUSHJ P,TSTRB
+		JRST SKPRET]
+	JRST SKPRET
+	>
+
+; Default extension
+; Call:	JFN, ETC.
+;	PUSHJ P,DEFEXT
+; Return
+;	+1	; User default does not exist
+;	+2	; Hunky dory, the string specified by the user becomes
+;		; The extension
+
+DEFEXT:	TLNN E,777777		; No default if short form
+	XCTUU [SKIPN A,5(E)]	; Get user's default pointer
+	POPJ P,
+	TEST(NE,NNAMF)
+	POPJ P,
+	PUSHJ P,REDFLT		; Copy default string
+	TEST(ZE,DFSTF)
+	JRST DFSTRE
+	PUSHJ P,EXTLKX		; Look it up
+	POPJ P,
+	POPJ P,			; None such
+	NOINT
+	HLRZ B,FILTMP(JFN)
+	HRRZS FILTMP(JFN)
+	HRRM B,FILNEN(JFN)
+	OKINT
+	TEST(O,EXTF,EXTTF)
+	AOS (P)
+	TEST(NN,NREC)
+	TEST(NE,NNAMF)
+	POPJ P,
+IFE SMXGTJ,<
+	PUSH P,B
+	MOVEI B,"."
+	TEST(ZN,EXTFF)
+	PUSHJ P,OUTCH
+	POP P,B
+	PUSHJ P,TSTRB		; Output the default extension
+	>
+IFN SMXGTJ,<
+	TEST(ZN,EXTFF)		; Entering extension?
+	 JRST   [CHRTP <".">	; Not yet, have to add "."
+		 CHOUT <".">
+		 JRST .+1]
+	HRRZ A,FILNEN(JFN)	; Then add the default extension
+	PUSHJ P,RTSTRB
+	HRRZ B,FILNEN(JFN)
+	PUSHJ P,TSTRB
+	>
+	TEST(NE,NVERF)
+	POPJ P,
+IFN SMXGTJ,<
+	CHRTP <";">
+	>
+	CHOUT <";">
+	JRST ENDEX0
+
+DFSTRE:	
+IFE SMXGTJ,<
+	MOVEI B,"."
+	>
+	TEST(ON,EXTFF)
+	TEST(NE,NREC)
+	JRST DFSTE1
+	TEST(NN,NNAMF)
+IFE SMXGTJ,<
+	PUSHJ P,OUTCH
+DFSTE1:	PUSHJ P,STREXT
+	TEST(NN,NREC)
+	PUSHJ P,TYSTR
+	TEST(NN,NREC)
+	TEST(NE,NVERF)
+	JRST SKPRET
+	CHOUT <";">
+	JRST SKPRET
+	>
+IFN SMXGTJ,<
+	JRST   [CHOUT <".">	; Add a "."
+		CHRTP <".">
+		JRST .+1]
+DFSTE1:	NOINT
+	HLRZ A,FILTMP(JFN)	; Wild card, save it
+	HRLM A,FILEXW(JFN)
+	HRRZS FILTMP(JFN)	; Show it's gone
+	OKINT
+	PUSHJ P,SETTMP		; Should be free, but make sure
+	PUSHJ P,STREX0		; Go find an example
+	TEST(O,EXTF,EXTTF)	; Show we found one
+	TEST(NE,NREC)
+	 JRST SKPRET
+	HLRZ B,FILEXW(JFN)	; Add wild card str to user output
+	PUSHJ P,TSTRB
+	HLRZ A,FILEXW(JFN)	; And to the retype buffer
+	PUSHJ P,RTSTRB
+	TEST(NE,NVERF)
+	 JRST SKPRET
+	CHOUT <";">
+	CHRTP <";">
+	JRST SKPRET
+	>
+
+; Default version
+; Call:	JFN ETC.
+;	PUSHJ P,DEFVER
+; Return
+;	+1	; Unless error
+; Sets the file version number to the default specified by user
+; Clobbers a,b,c,d
+
+DEFVER:	MOVEI A,0
+	TEST(NE,NVERF,NNAMF)
+	POPJ P,
+	XCTUU [HRRE A,0(E)]	; Get default version
+	SKIPN A
+	TEST(NN,OUTPF)
+	JRST .+2
+	SOS A			; 0 default becomes -1 for output
+IFE SMXGTJ,<
+	TEST(NE,TMPFF)
+	SKIPLE A
+	JRST DEFVR1
+	MOVE A,JOBNO		; Default becomes job number for temp
+	ADDI A,^D100000
+	>
+IFN SMXGTJ,<
+	TEST(NN,SCRF)		; Scratch file specified?
+	TEST(NN,TMPFF)		; Or not temp?
+	 JRST DEFVR1		; Yes, handle version as usual
+	SKIPG A			; No, temp file.  Specific version?
+	CAMGE A,[-1]		; Or most recent/*?
+	 JRST DEFVR1		; Yes, handle normally
+	PUSH P,A		; Save current version spec
+	MOVE A,JOBNO		; Try for 100000+job number first
+	ADDI A,^D100000
+	PUSHJ P,GTVER		; Go find it
+	 JRST	[POP P,A	; Bad luck - so try the earlier one
+		 JRST DEFVR1]
+	SUB P,[1,,1]		; Clear the fall back version
+	JRST DEFVR2		; Go see about printing it
+	>
+DEFVR1:	CAMN A,[-3]
+	JRST DFSTRV
+	CAMN A,[-2]
+	TEST(O,LVERF)
+	CAMN A,[-1]
+	TEST(O,HVERF)
+	SKIPN A
+	TEST(O,RVERF)
+IFE SMXGTJ,<
+	PUSHJ P,VERLUK		; Extant?
+	JRST ERRDO
+DEFVR2:	HRRM A,FILVER(JFN)	; Store for later
+	MOVE B,A
+	TEST(O,VERTF,VERF)
+	TEST(NN,NREC)
+	PUSHJ P,DNOUT
+	POPJ P,
+	>
+IFN SMXGTJ,<
+	PUSHJ P,GTVER		; Go find a version with acceptable access
+	 ERRLJF(GJFX20)		; Bad news, couldn't find one
+DEFVR2:	PUSH P,B		; Save the FDB ctl bits
+	MOVE B,A		; Output the version if necessary
+	TEST(NE,NREC)		; Recognition?
+	 JRST DEFVR3		; No, finish doing version field
+	PUSHJ P,DNOUT		; Yes, type version number
+	HRRZ B,FILVER(JFN)	; Add version number to retype buffer
+	MOVEI C,^D10
+	PUSHJ P,RTNOUT
+
+DEFVR3:	POP P,A			; Recover FDB ctl bits
+	TLNN A,FDBTMP		; Temp file already?
+	TEST(NE,TMPFF)		; Or specified?
+	 SKIPA
+	JRST DEFVR5		; No, wrap things up
+	TEST(NE,NREC)		; Recognition suppressed?
+	 JRST DEFVR4		; Yes, make sure bits are set
+	HRRZ B,FILVER(JFN)	; Version in temp range?
+	CAIGE B,^D100000
+	 JRST [TEST(NE,SCRTF)	; No, ;s already typed?
+		JRST DEFVR4
+	       TMSG </;S/>	; No, type it
+	       RTPMSG </;S/>
+	       JRST DEFVR4]
+	TEST(NE,TMPTF)		; Temp file, ;t already typed?
+	 JRST DEFVR4		; Yes
+	TMSG </;T/>		; No, type it
+	RTPMSG </;T/>
+DEFVR4:	PUSHJ P,TCH1		; Yes, set up bits
+DEFVR5: TEST(O,TSFF)		; Make sure next ; is ignored
+	JRST ENDEX0
+	>
+
+DFSTRV:	PUSHJ P,STRVER
+	TEST(O,VERTF,VERF)
+	TEST(NN,NREC)
+IFE SMXGTJ,<
+	PUSHJ P,TYSTR
+	>
+IFN SMXGTJ,<
+	JRST   [PUSHJ P,TYSTR	; Output stars
+		RTSTAR
+		JRST .+1]
+	>
+	POPJ P,
+
+; Default account
+; Call:	JFN ETC.
+;	PUSHJ P,DEFACT
+; Returns
+;	+1	; Always
+; Sets filact to that specified by program
+; Clobbers a,b,c,d
+
+DEFACT:	TEST(NE,NVERF,NNAMF)
+	POPJ P,
+	TLNN E,777777		; No default if short form
+	XCTUU [SKIPN A,7(E)]	; Get default account
+	POPJ P,			; Nono specified
+	TLNN A,777777		; Lh = 0?
+	HRLI A,440700		; Yes, set up 7 bit bytes
+	CAMG A,[577777777777]	; String pointer?
+	CAMGE A,[500000000000]
+	JRST DEFAC2		; Yes
+	MOVEM A,FILACT(JFN)	; No. numeric
+	JRST DEFAC3
+
+DEFAC2:	MOVE B,MODES
+IFE SMXGTJ,<
+	TLNN B,(1B1)
+	>
+IFN SMXGTJ,<
+	HRR B,CAPENB		; Get enabled capabilities too
+	TDNN B,[1B1!WHEEL!OPER]	; String OK if he has any of these
+	>
+	POPJ P,
+	PUSHJ P,REDFLT		; Copy string to temp block
+	NOINT
+	HLRZ A,FILTMP(JFN)
+	HRRZS FILTMP(JFN)
+	MOVEM A,FILACT(JFN)
+	OKINT
+DEFAC3:	TEST(O,ACTF)
+	POPJ P,
+
+; Default protection
+; Call:	JFN ETC.
+;	PUSHJ P,DEFPRT
+; Return
+;	+1	; unless error
+; Sets the file protection to default specified by user or directory
+; Clobbers a,b,c,d
+
+DEFPRT:	TEST(NE,NVERF,NNAMF)
+	POPJ P,
+	TLNN E,777777		; No default if short form
+	XCTUU [SKIPN A,6(E)]	; Get the default protection from user
+	POPJ P,
+	CAMG A,[577777777777]	; Must be numeric
+	CAMGE A,[500000000000]
+	ERRLJF GJFX14		; Otherwise error
+	MOVEM A,FILPRT(JFN)
+	TEST(O,PRTF)
+	POPJ P,
+
+; Copy default string
+; Call:	A	; A default string pointer
+;	PUSHJ P,REDFLT
+; Returns
+;	+1	; In a, a lookup pointer
+; Copies the default string into a block addressed by lh(filtmp(jfn))
+; Clobbers a,b,c,d
+
+REDFLT:	PUSH P,A
+	HLRZ A,FILTMP(JFN)
+	JUMPN A,REDFL0
+	MOVEI B,MAXLW+1
+	NOINT
+	PUSHJ P,ASGJFR
+	ERRLJF GJFX22		; Insufficient space
+	HRLM A,FILTMP(JFN)
+	OKINT
+REDFL0:	HRLI A,(<POINT 7,0>)
+	AOS C,A
+	POP P,A
+	MOVEI D,MAXLC+1
+	MOVEI B,0		; Null byte if next instruction jumps
+	TEST(Z,DFSTF)
+IFE SMXGTJ,<
+	JUMPE A,REDFL2		; No pointer
+	TLNE A,777777
+	JUMPGE A,REDFL1
+	CAML A,[777777000000]
+	HRLI A,440700
+	>
+IFN SMXGTJ,<
+	TLC A,-1		; Implicit byte pointer?
+	TLCN A,-1
+	 HRLI A,440700		; Yes, make it real
+IFN KIFLG,<
+	TLNE A,37		; If KI-10, can't have indir or index
+	 JRST REDFL2		; Too bad, assume null
+	>
+	>
+REDFL1:	XCTBU [ILDB B,A]
+	ANDI B,177
+	CAIL B,"a"
+	CAILE B,"z"
+	CAIA
+	SUBI B,"a"-"A"
+	PUSH P,C
+	PUSH P,B
+	IDIVI B,^D36/CCSIZE
+	LDB C,CPTAB(B+1)
+	POP P,B
+	CAIN C,16		; Character quote?
+	 JRST REDFL3
+	CAIN C,20
+IFE SMXGTJ,<
+	JRST REDFST
+	>
+IFN SMXGTJ,<
+	JRST   [TEST(O,DFSTF)
+		TEST(NN,ASTAF,OSTRF)   ; Wild card - allowed?
+		 ERRLJF GJFX31	       ; No
+		JRST REDFL4]
+	>
+	CAIL C,21
+	CAILE C,24
+	CAIN C,30
+IFE SMXGTJ,<
+	JRST .+3
+	SKIPE C
+	MOVEI B,0
+	POP P,C
+	>
+IFN SMXGTJ,<
+	JRST REDFL4
+	CAIE C,32		; S?
+	CAIN C,0		; or UC letter
+	 JRST REDFL4		; Yes, save it
+	MOVEI B,0
+REDFL4:	POP P,C
+	>
+
+REDFL2:
+IFE SMXGTJ,<
+	IDPB B,C
+	SOSGE D
+	ERRLJF GJFX5
+	JUMPN B,REDFL1
+	>
+IFN SMXGTJ,<
+	SOSGE D
+	ERRLJF GJFX5
+	IDPB B,C
+	JUMPN B,REDFL1		; If not end, do another
+
+	TEST(ZE,CNTVF)		; Any chars quoted?
+	TEST(NE,DFSTF)		; Any wild cards?
+	 JRST REDFL6		; Leave string as is
+	HLRZ A,FILTMP(JFN)	; No, squeeze out any ^V's
+	AOS A
+	HRLI A,440700
+	MOVE C,A		; A = source, C = destination
+REDFL5:	ILDB B,A		; Copy a char
+	CAIN B,<"V"-100>	; Unless it's a ^V
+	 JRST REDFL5
+	IDPB B,C
+	JUMPN B,REDFL5		; And quit after a 0
+REDFL6:
+	>
+	HLRZ A,FILTMP(JFN)
+	MOVE B,C
+	PUSHJ P,TRMBLK		; Trim the block and return excess
+	HLRZ A,FILTMP(JFN)
+	MOVN B,(A)
+	HRLI A,2(B)
+	POPJ P,
+
+IFE SMXGTJ,<
+REDFL3:	POP P,C
+	XCTBU [ILDB B,A]
+	JRST REDFL2
+	>
+IFN SMXGTJ,<
+REDFL3:	POP P,C
+	TEST(O,CNTVF)		; Mark ^V active
+	SOSGE D			; Append ^V for now
+	 ERRLJF GJFX5
+	IDPB B,C
+	XCTBU [ILDB B,A]
+	JRST REDFL2
+	>
+
+IFE SMXGTJ,<
+REDFST:	TEST(O,DFSTF)
+	SUB P,[XWD 1,1]
+	POPJ P,
+	>
+
+IFE SMXGTJ,<
+; Delete character
+
+DLCHR:	MOVE C,FILCNT(JFN)
+	CAIL C,MAXLC		; Any character left in string?
+	JRST DLCHR2
+IFN IMSSS+SUMEX,<
+	XCTUU [HRRZ A,1(E) ]
+	TLNE E,777777		
+	TLNE E,2
+	CAIN A,377777
+	JRST DELC.1
+	DELCH
+	JRST DELC.1
+	JFCL
+	JRST DELC.2
+>;END OF IMSSS
+DELC.1:	CHOUT "\"		; Output backslash
+	LDB B,FILOPT(JFN)	; Get last character
+	PUSHJ P,OUTCH		; And output it
+DELC.2:	AOS FILCNT(JFN)
+	MOVE A,FILOPT(JFN)
+	PUSHJ P,DBP		; Decrement byte pointer
+	MOVEM A,FILOPT(JFN)
+	MOVE A,NUM
+	TEST(NN,NUMFF)
+	POPJ P,
+	TEST(NE,OCTF)
+	JRST [	IDIVI A,8
+		JRST .+2]
+	IDIVI A,^D10
+	MOVE NUM,A
+	POPJ P,
+
+DLCHR2:	TEST(ZE,STARF)
+	SKIPA B,["*"]
+DLCHR1:	MOVEI B,7
+	JRST OUTCH		; Type bell and return to main loop
+
+; Delete current field
+
+DELFLD:	MOVE C,FILCNT(JFN)
+	CAIL C,MAXLC		; Any thing in this field?
+	JRST [	TEST(ZE,STARF)
+		JRST .+1
+		JRST DLCHR1]
+	TMSG </_/>
+	JRST SETTMP		; Reset tmp, return to main loop
+
+	>	; End of IFE SMXGTJ conditional
+
+IFN SMXGTJ,<
+; New character delete and field delete stuff for backspacing, etc.
+; Dispatched from the character table
+
+DLCHR:	PUSHJ P,DECBUF		; Go decrement the buffers 1 char
+	 JRST RDING		; Nothing left, break or ring him
+	SKIPL A			; Was this char quoted?
+	 JRST   [HRRZ B,A	; No, check for wild card
+		 CAIE B,"*"
+		 CAIN B,"%"
+		 TEST(O,RSCNF)	; Had one, better rescan the input
+		 JRST .+1]
+	TLZE A,FILTDN		; FILTMP empty?
+	 TEST(O,RSCNF)		; Yes, better rescan the input
+	PUSH P,A		; Save the deleted char
+	XCTUU [HRRZ A,1(E)]	; Get user's out JFN if any
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777		; JFN, was it NULL?
+	 JRST DLCHR1		; Yes, finish up
+IFN IMSSS+SUMEX,<
+	DELCH			; Do display delete
+	 JRST DLCHR0		; Not a TTY
+	 JFCL			; Display already at 0
+	 JRST DLCHR1		; Display char wiped out
+	>
+DLCHR0:	CHOUT ("\")		; Old standby notation
+	HRRZ B,0(P)		; And the char itself
+	PUSHJ P,OUTCH
+	SKIPG 0(P)		; ^V there?
+	 JRST   [TMSG<"^V">	; Let him know it was quoted
+		 JRST .+1]
+
+DLCHR1:	SUB P,[1,,1]		; Reset stack
+	TEST(NN,RSCNF)		; Rescan required?
+	 POPJ P,		; No, return straight away
+
+
+; Here we initiate a rescan of the retype string.  The following cleans
+; out the JFN entries, name blocks collected to here, and begins the
+; scanner relooking at the retype buffer as input.
+
+RESCAN:	NOINT
+	HRRZ A,FILEXW(JFN)	; Preserve retype buffer info
+	PUSH P,A
+	HLLZS FILEXW(JFN)	; Now make believe it isn't there
+	PUSHJ P,RELJFN		; Go clean up
+	PUSHJ P,ASGJFN		; Go get another
+	 JRST   [MOVEI A,JSBFRE	; Oops, no more left
+		 POP P,B	; Release retype buffer
+		 SKIPE B
+		 PUSHJ P,RELFRE
+		 ERR(GJFX3)]	; And bomb out
+	POP P,FILEXW(JFN)	; Set up old retype stuff
+	OKINT			; Interrupts again
+	XCTUU [HLLZ F,0(E)]	; Fetch his flags again
+	MOVEI F1,0		; And clear others
+	TEST(NN,TMPFF)		; Temp file specified?
+	 TEST(O,SCRF)		; No, try for normal versions
+	CHRTP(0)		; Better be sure retype terminated
+	TEST(O,RSCNF)		; Turn for rescan of input
+	PUSHJ P,SETRTP		; Reinit retype buffer pointers
+	JRST SETTMP		; Get another temp block and continue
+
+
+; This routine is entered when an attempt is made to delete past the
+; start of the input.  If the long-long GTJFN requested it, an error
+; is returned.  Otherwise, he is dinged.
+
+RDING:	HRRZ B,FILEXW(JFN)	; Request break?
+	MOVE B,BLKFG(B)
+	TRNN B,BRDEL
+	JRST DING		; No, just ding him
+	ERRLJF GJFX40		; Yes, give him error
+
+
+; This routine deletes what exists of the current field.  It then
+; forces a rescan of the input to reestablish the right state.
+
+DELFLD:	PUSHJ P,CNTFLD		; Count the chars to delete this field
+	JUMPE D,RDING		; If none there, break or ding him
+	XCTUU [HRRZ A,1(E)]	; Get his output JFN, if any
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777		; JFN, is it NULL?
+	 JRST RESCAN		; Yes, just go do the rescan
+IFN IMSSS+SUMEX,<
+	PUSH P,A		; Save the JFN for now
+	DVCHR			; What kind of device is it?
+	POP P,A
+	HLRZS B
+	ANDI B,777		; Split out device type
+	CAIE B,TTYDV		; TTY?
+	 JRST DELFL3		; No, do the old type
+DELFL2:	DELCH			; TTY, try wiping screen
+	 JRST DELFL3		; Not a TTY? - shouldn't happen!
+	 JFCL			; Display already at 0
+	 JRST   [SOJG D,DELFL2	; OK, do the rest
+		 JRST RESCAN]	; Last one, go rescan the input
+	>
+
+DELFL3:	CHOUT("_")		; Old style field delete
+	JRST RESCAN		; Now rescan
+
+
+
+; This routine deletes from the input buffer until FILTMP is empty.
+; The count of characters backspaced to the start is in D.  Also the
+; retype and typescript ptrs point to the start of this field.
+; Entry: Input string in FILTMP and RETYPE
+; Call:	PUSHJ P,CNTFLD
+; Return: Count of chars to start of field in D
+; Clobbers A,B,C,D
+
+CNTFLD:	PUSH P,[0]		; Create a temporary counter
+CNTFL0:	PUSHJ P,DECBUF		; Decrement the buffer once
+	 JRST CNTFL1		; OK, no more chars anywhere
+	AOS 0(P)		; Got rid of one char, note it
+	TLNN A,FILTDN		; FILTMP empty?
+	 JRST CNTFL0		; No, do another one
+CNTFL1:	POP P,D			; Get count of chars backspaced
+	POPJ P,
+
+	>	; End of IFN SMXGTJ conditional
+
+; Delete everything
+
+DELALL:	MOVE B,[BYTE (2)0,0,0,0,0,0,0,0,0,0,2,0,0,2,0,0,0,0]
+	MOVE C,[BYTE (2)0,0,0,0,0,0,0,0,0,0,0,0,0,2]
+	PUSHJ P,SFCC
+IFE SMXGTJ,<
+	TMSG </___
+/>
+	>
+IFN SMXGTJ,<
+	PUSHJ P,DECBUF		; See if anything left
+	 JRST RDING		; No, break or ding
+	TMSG </___/>
+	>
+	PUSHJ P,SFCC0
+	NOINT
+	PUSHJ P,RELJFN		; Release jfn (to clear free storage)
+	PUSHJ P,ASGJFN		; And reassign
+	 ERR(GJFX3)		; Should not happen, but in case
+	OKINT
+	XCTUU [HLLZ F,0(E)]
+	MOVEI F1,0
+IFE SMXGTJ,<
+	JRST SETTMP		; And start over
+	>
+IFN SMXGTJ,<
+	PUSHJ P,SETRTP		; Set up a new retype buffer
+	PUSHJ P,SETTMP		; And a temp buffer
+	JRST RETYPE		; Now go retype - nothing really but
+				; the user may have a prompt
+	>
+
+
+IFN SMXGTJ,<
+; The following decrements all input buffers 1 effective character
+; position.  The character value "deleted" is returned in A.  Several
+; flags are returned in the left half of A:
+;   CTVCHR	If the character was preceeded by an odd number of ^V's
+;   FILTDN	If FILTMP was empty before this char deleted
+;
+; The buffers affected include:
+;   Retype buffer	ptr in FILEXW(JFN)
+;   User typescript	ptr in retype buffer block (if any)
+;   Temporary block	ptr in FILTMP(JFN)
+
+; Call:	PUSHJ P,DECBUF
+;
+; Returns  +1  Nothing more to delete anywhere
+;	   +2  One character accounted for - if FILTMP was empty
+;		at start of this call, RSCNF is set
+;
+; Clobbers A,B,C,D
+
+DECBUF:	HRRZ D,FILEXW(JFN)	; Get retype buffer
+	SKIPG D
+	 POPJ P,		; Oops, none there.
+	MOVEI C,MAXRC		; Compute chars in retype buffer
+	SUB C,BLKCT(D)
+	SKIPG C			; Anything there?
+	 POPJ P,		; No, tell him all clear at +1
+	AOS 0(P)		; Got at least one, return +2
+	MOVE A,BLKBP(D)		; ptr to current char in retype
+	SETZ B,			; Counter for ^V's
+DECBF0:	SOJLE C,DECBF1		; If no PRECEEDING chars, move on
+	PUSHJ P,DECBP		; Have one, decrement byte ptr
+	LDB D,A			; What is it?
+	CAIE D,<"V"-100>	; ^V?
+	 JRST DECBF1		; No, quit looking
+	AOJA B,DECBF0		; Yes, count it and look for more
+
+DECBF1:	HRRZ D,FILEXW(JFN)	; Restore retype ptr
+	MOVE A,BLKBP(D)		; Get current byte ptr
+	LDB C,A			; And the character
+	TRNE B,1		; Odd number of ^V's?
+	 TLO C,CTVCHR		; Yes, add flag
+	PUSHJ P,DECBP		; Back up one for real
+	AOS BLKCT(D)
+	JUMPL C,   [PUSHJ P,DECBP	; ^V, need one more
+		    AOS BLKCT(D)
+		    JRST .+1]
+	MOVEM A,BLKBP(D)	; Update it permanently
+
+; Here the retype buffer is taken care of.  Try the user typescript
+
+	MOVE A,BLKFG(D)		; Get flags
+	TLNN A,USRTY		; Typescript active?
+	 JRST DECBF2		; No, just do temp block
+	MOVE A,USRBP(D)		; Get user's byte ptr
+	PUSH P,C		; Save coded character
+	PUSHJ P,DBP		; Do general decrement - may not be 7 bit
+	AOS USRCT(D)		; And his count
+	SKIPG 0(P)		; ^V too?
+	 JRST   [PUSHJ P,DBP	; Yes
+		 AOS USRCT(D)
+		 JRST .+1]
+	MOVEM A,USRBP(D)	; Save it for later
+	POP P,C			; And recover the character
+
+; Here we just need to do the temporary block
+
+DECBF2:	MOVE A,FILCNT(JFN)	; Get count remaining
+	CAIL A,MAXLC		; Anything in the buffer?
+	 JRST   [TLO C,FILTDN	; Show FILTMP was empty
+		 JRST DECBF3]
+	MOVE A,FILOPT(JFN)	; Get the current byte ptr
+	PUSHJ P,DECBP		; Decrement it
+	MOVEM A,FILOPT(JFN)	; And return it
+	AOS FILCNT(JFN)		; Bump the count
+	TEST(NN,NUMFF)		; Entering a number?
+	 JRST DECBF3		; No, carry on
+	MOVE A,NUM		; Yes, decrement it
+	MOVEI B,^D8		; Octal for now
+	TEST(NN,OCTF)		; Really decimal?
+	 MOVEI B,^D10		; Yes
+	IDIV A,B		; Reduce the number
+	MOVE NUM,A		; And return the new value
+
+DECBF3:	MOVE A,C		; All done - put "deleted" char in A
+	POPJ P,
+
+
+
+; Following is a routine to decrement a 7 bit byte pointer in A.
+;Call:	PUSHJ P,DECBP
+
+DECBP:	ADD A,[070000,,0]	; Back up
+	TLNE A,(1B0)		; Overflow?
+	 SUB A,[430000,,1]	; Yes, fix it up
+	POPJ P,
+
+
+	>	; End if IFN SMXGTJ conditional
+
+
+; Recognize current field
+; Called from gtjfn loop
+; Decides which field was being input, and then attempts to recognize it
+
+RECFLD:	TLNE F1,DIRSF!NAMSF!EXTSF!VERSF!STARF
+	JRST DING		; Cannot recognize after *
+	TEST(NE,DIRFF)		; Find which field is being input
+	JRST RECDIR		; Directory name is
+	TEST(NE,EXTFF)
+	JRST RECEX0		; Extension is
+	TEST(NN,NAMF)
+	JRST RECNA0		; Recognize name
+	MOVE C,FILCNT(JFN)
+	CAIE C,MAXLC
+	JRST RECFL1		; Some thing typed, treat like cont-f
+	TEST(NE,VERF)
+	JRST DING		; Can recognize no more
+IFN SMXGTJ,<
+	AOS 0(P)		; Make return +2 (DEFVER bombs if error)
+	>
+	JRST DEFVER		; Default version
+
+RECFL0:	TEST(NE,DIRFF)
+	JRST RECDIR
+	TEST(NE,EXTFF)
+	JRST RECEXT
+	TEST(NN,NAMF)
+	JRST RECNAM
+RECFL1:	MOVEI B,";"
+	TEST(NN,NREC)
+IFE SMXGTJ,<
+	PUSHJ P,OUTCH
+	>
+IFN SMXGTJ,<
+	JRST   [PUSHJ P,OUTCH
+		CHRTP <";">
+		JRST .+1]
+	>
+	AOS (P)
+	JRST ENDEXT
+
+; Recognize directory name
+; Call:	RH(FILTMP(JFN))	; Pointer to string block to recognize
+;	FILOPT(JFN)	; Pointer to last character in string
+; Flags norec, devf, dirf,dirff,dirtf are updated or used
+;	PUSHJ P,RECDIR
+; Return
+;	+1	; Ambiguous
+;	+2	; Ok
+; Does not return if directory could not exist
+; Clobbers most everything
+
+RECDIR:	TEST(NN,DEVF)
+	PUSHJ P,DEFDEV		; Default device first
+	PUSHJ P,ENDSTR		; Terminate string, get lookup pointer
+	PUSH P,FILOPT(JFN)	; Save filopt(jfn) for typing out tail
+	PUSHJ P,DIRLUK		; Lookup directory name get number
+	ERRLJF GJFX17		; No such directory
+	JRST [	PUSHJ P,DING
+		POP P,FILOPT(JFN)
+		POPJ P,]
+	HRRM A,FILDDN(JFN)	; Store directory number
+IFN SMXGTJ,<
+	MOVE A,0(P)		; Add rest of string to retype buffer
+	PUSHJ P,RTSTR
+	CHRTP (76)		; Add right bracket
+	>
+	POP P,B
+	PUSHJ P,TSTR		; Output remainder of string
+	CHOUT(76)		; Terminate
+	TEST(O,DIRF,DIRTF)
+	TEST(Z,DIRFF)
+	AOS (P)
+	JRST SETTMP		; Reset temp block and return
+
+; Recognize extension
+; This routine operates in the same way as recdir described above
+
+RECEXT:	PUSHJ P,RECEXX
+	JRST ERRDO
+	JRST DING
+	JRST SKPRET
+
+RECEXX:	PUSHJ P,ENDSTR		; Terminate string, get lookup pointer
+	PUSH P,FILOPT(JFN)	; Save filopt(jfn) for typing out tail
+	PUSHJ P,EXTLUK		; Lookup extension
+	SOS -1(P)		; No such extension
+	JRST [	POP P,FILOPT(JFN)
+		JRST SKPRET]	; Ambiguous
+	PUSHJ P,ENDTMP		; Truncate temp string get pointer
+	HRRM A,FILNEN(JFN)	; Store as extension
+	OKINT
+	TEST(O,EXTF,EXTTF)
+	TEST(Z,EXTFF)
+	POP P,B
+	AOS (P)
+	AOS (P)
+	TEST(NN,NNAMF)
+	TEST(NE,NREC)		; Were we performing recognition?
+	JRST SETTMP		; No. done
+IFN SMXGTJ,<
+	PUSH P,B		; Add rest of string to retype buffer
+	MOVE A,B
+	PUSHJ P,RTSTR
+	POP P,B
+	>
+	PUSHJ P,TSTR		; Yes, output tail
+	TEST(NE,NVERF)
+	JRST SETTMP
+	CHOUT <";">		; And semicolon
+IFN SMXGTJ,<
+	CHRTP <";">
+	>
+	TEST(O,KEYFF,NUMFF)	; And act like the user did it
+	JRST SETTMP		; Reset temp block and return
+
+RECEX0:	PUSHJ P,RECEXX
+	 JFCL
+	 SKIPA
+	 JRST SKPRET
+	MOVE C,FILCNT(JFN)
+	CAIN C,MAXLC
+	PUSHJ P,DEFEXT
+	JRST DING
+	JRST SKPRET
+
+; Recognize name
+; This routine operates in the same way as recdir and recext above
+
+RECNA0:	PUSHJ P,RECNA1
+	JRST [	MOVE C,FILCNT(JFN)
+		CAIN C,MAXLC
+		PUSHJ P,DEFNAM
+		JRST DING
+		JRST .+1]
+	TEST(NE,NNAMF)
+	JRST SKPRET
+	CHOUT "."
+IFN SMXGTJ,<
+	CHRTP <".">
+	>
+	TEST(O,EXTFF)
+	JRST SKPRET
+
+RECNAM:	PUSHJ P,RECNA1
+	JRST DING
+	JRST SKPRET
+
+RECNA1:	TEST(NN,DIRF)
+	PUSHJ P,DEFDIR		; Default directory
+	PUSHJ P,ENDSTR		; Terminate string, get lookup pointer
+	PUSH P,FILOPT(JFN)	; Save filopt(jfn) for typing tail
+	PUSHJ P,NAMLUK		; Lookup name in directory
+	JRST ERRDO
+	JRST [	POP P,FILOPT(JFN)
+		POPJ P,]	; Ambiguous
+	PUSHJ P,ENDTMP		; Truncate temp block, and get pointer
+	HRLM A,FILNEN(JFN)	; To put in file name
+	OKINT
+	TEST(O,NAMF,NAMTF)
+	POP P,B
+	AOS (P)
+	TEST(NN,NNAMF)
+	TEST(NE,NREC)
+	JRST SETTMP		; Setup new temp, and return
+IFN SMXGTJ,<
+	PUSH P,B		; Add rest of string to retype buffer
+	MOVE A,B
+	PUSHJ P,RTSTR
+	POP P,B
+	>
+	PUSHJ P,TSTR		; Type remainder
+	JRST SETTMP
+
+; Retype input so far
+
+RETYPE:	MOVE B,[BYTE (2)0,0,0,0,0,0,0,0,0,0,2,0,0,2,0,0,0,0]
+	MOVE C,[BYTE (2)0,0,0,0,0,0,0,0,0,0,0,0,0,2]
+	PUSHJ P,SFCC
+	TMSG </
+/>
+	PUSHJ P,SFCC0
+
+IFN SMXGTJ,<
+	XCTUU [HRRZ A,1(E)]	; Get user's output JFN (or str ptr)
+	TLNE E,777777		; Long or short?
+	TLNE E,2		; short, AC 2 = jfn's?
+	CAIN A,377777		; Real output jfn - is it null?
+	 POPJ P,		; Str ptr or null, return
+
+; Output jfn is in AC 1.  Check if user has a prompt to add
+
+	HRRZ B,FILEXW(JFN)	; Get ptr to retype buffer
+	MOVE C,BLKFG(B)		; And the flags
+	TLNN C,USRPR		; User prompt there?
+	 JRST RETY1		; No just retype the file stuff
+	XCTUU [MOVE C,PRPTR(E)]		; Get user's byte ptr
+	TLC C,777777		; If implicit, make it real
+	TLCN C,777777
+	 HRLI C,440700
+IFN KIFLG,<
+	TLNE C,37		; On KI-10 can't have indir or index
+	 JRST RETY1		; Too bad, forget prompt
+	>
+RETY0:	XCTUU [ILDB B,C]	; Get a user's byte
+	JUMPE B,RETY1		; If end of string, exit
+	BOUT			; Otherwise let him see it
+	JRST RETY0		; And the next one
+
+RETY1:	HRRZ B,FILEXW(JFN)	; Back to retype buffer
+	MOVE C,BLKBP(B)		; Make sure the string ends in 0
+	SETZ D,
+	IDPB D,C
+	MOVEI C,BLKDT(B)	; Now build str ptr to start
+	HRLI C,440700
+	PUSH P,C		; and save it
+	MOVE C,BLKFG(B)		; does he want a literal retype?
+	TLNE C,LITRF
+	 JRST RETY8		; Yes, just do it
+
+; Here we have to edit in any non-standard defaults for the Device and
+; the Directory since they won't have been typed and type out the rest
+; of the name.
+
+	SUB P,[1,,1]		; First reset the stack
+	TEST(NE,DEVTF)		; Explicit device typed?
+	 JRST RETY2		; Yes, go print it
+	HRRZ B,FILEXW(JFN)	; No, but device may be non-std
+	MOVE B,BLKFG(B)		; Get flags
+	TLNN B,DEVRF
+	 JRST RETY3		; No it's OK, look at directory
+RETY2:	HLRZ B,FILDDN(JFN)	; Non-std, write it
+	PUSHJ P,TSTRB
+	CHOUT <":">		; And ending ":"
+
+RETY3:	TEST(NE,DIRTF)		; Directory explicitly typed?
+	 JRST RETY3A		; Yes, print it
+	HRRZ B,FILEXW(JFN)	; No, check non-std flags
+	MOVE B,BLKFG(B)
+	TLNN B,DIRRF
+	 JRST RETY4		; It's standard - forget it
+RETY3A:	CHOUT (74)		; Non-std, print it
+	TEST(NE,DIRSF)		; Wild card?
+	 JRST   [HLRZ B,FILDNW(JFN)   ; Yes print it
+		 PUSHJ P,TSTRB
+		 JRST RETY3B]	; And finish it
+	PUSHJ P,GDNAME		; Real name - get the string
+	 JRST RETY3B		; Error here, shouldn't happen
+	HLRZ B,FILTMP(JFN)	; Got it, so print it
+	PUSHJ P,TSTRB
+	PUSHJ P,RELTMP		; that's done so release the temp temp
+RETY3B:	CHOUT (76)		; Finish punctuation
+
+RETY4:	TEST(NE,NAMTF)		; Name typed?
+	TEST(NE,NNAMF)		; And device with file names?
+	POPJ P,			; No, just quit
+	HLRZ B,FILNEN(JFN)	; Assume regular name
+	TEST(NE,NAMSF)		; Wild card?
+	 HRRZ B,FILDNW(JFN)	; Yes, use that string instead
+	PUSHJ P,TSTRB
+	CHOUT <".">		; And punctuate
+	TEST(NN,EXTTF)		; Extension typed?
+	 POPJ P,		; No, quit
+	HRRZ B,FILNEN(JFN)	; Yes, assume regular extension
+	TEST(NE,EXTSF)		; Wild card?
+	 HLRZ B,FILEXW(JFN)	; Yes, use it instead
+	PUSHJ P,TSTRB		; Print it
+
+	TEST(NE,VERTF)		; Version typed?
+	TEST(NE,NVERF)		; And device with versions, etc.?
+	 POPJ P,		; No, quit
+	CHOUT <";">
+	TEST(NE,VERSF)		; Wild card?
+	JRST [	PUSHJ P,TYSTR	; Yes, print *
+		JRST RETY5]
+	HRRZ B,FILVER(JFN)	; No, append decimal number
+	PUSHJ P,DNOUT
+RETY5:	TEST(NE,TMPTF)		; ;T typed?
+	 JRST	[TMSG </;T/>	; Yes, print it
+		 JRST RETY6]
+	TEST(NE,SCRTF)		; ;S typed?
+	 JRST	[TMSG </;S/>	; Yes, print it
+		 JRST RETY6]
+RETY6:	TEST(NN,PRTTF)		; Protection typed in?
+	 JRST RETY7		; No, try account
+	TMSG </;P/>
+	MOVE B,FILPRT(JFN)
+	TLNE B,777777
+	JRST [	TLZ B,700000
+		PUSHJ P,ONOUT
+		JRST RETY7]
+	PUSHJ P,TSTRB
+RETY7:	TEST(NN,ACTTF)		; Account typed in?
+	 POPJ P,		; No, quit
+	TMSG </;A/>
+	SKIPLE B,FILACT(JFN)
+	JRST [	PUSHJ P,TSTRB	; String account, print it
+		POPJ P,]
+	TLZ B,700000		; Numeric, print it
+	PUSHJ P,DNOUT
+	POPJ P,			; All done, quit
+
+
+; Here the rest of the retype buffer is all in order.  Just output it
+; as is
+
+RETY8:	POP P,B			; This is the most recent pointer
+	SETZ C,			; Now it's ASCIZ
+	SOUT
+	POPJ P,			; And wrap it up
+
+	>	; End of IFN SMXGTJ conditional
+
+IFE SMXGTJ,<
+	HLRZ B,FILDDN(JFN)
+	TEST(NN,DEVTF)
+	JRST RETY1
+	PUSHJ P,TSTRB
+	CHOUT <":">
+RETY1:	TEST(NN,DIRTF)
+	JRST RETY2
+	CHOUT(74)
+	TEST(NE,DIRSF)
+	JRST [	PUSHJ P,TYSTR
+		JRST RETY1A]
+	HRRZ A,FILDDN(JFN)
+	PUSHJ P,GDIRST		; Get the directory name
+	JRST RETY1A		; Not supposed to happen
+	MOVE B,A
+	PUSHJ P,TSTRB		; Type the string
+	PUSHJ P,USTDIR
+RETY1A:	CHOUT(76)
+RETY2:	TEST(NE,NNAMF)
+	POPJ P,
+	TEST(NN,NAMTF)
+	JRST RETY3
+	TEST(NE,NAMSF)
+	JRST [	PUSHJ P,TYSTR
+		JRST RETY2A]
+	HLRZ B,FILNEN(JFN)
+	PUSHJ P,TSTRB
+RETY2A:	CHOUT <".">
+	TEST(NN,EXTTF)
+	JRST RETY3
+	TEST(NE,EXTSF)
+	JRST [	PUSHJ P,TYSTR
+		JRST RETY2B]
+	HRRZ B,FILNEN(JFN)
+	PUSHJ P,TSTRB
+
+RETY2B:	TEST(NE,NVERF)
+	POPJ P,
+	CHOUT <";">
+	TEST(NN,VERTF)
+	JRST RETY4
+	TEST(NE,VERSF)
+	JRST [	PUSHJ P,TYSTR
+		JRST RETY4]
+	HRRZ B,FILVER(JFN)
+	PUSHJ P,DNOUT
+RETY4:	TEST(NN,TMPTF)
+	JRST RETY5
+	TMSG </;T/>
+RETY5:	TEST(NN,PRTF)
+	JRST RETY3
+	TMSG </;P/>
+	MOVE B,FILPRT(JFN)
+	TLNE B,777777
+	JRST [	TLZ B,700000
+		PUSHJ P,ONOUT
+		JRST RETY3]
+	PUSHJ P,TSTRB
+RETY3:	TEST(NN,ACTTF)
+	JRST RETY6
+	TMSG </;A/>
+	SKIPLE B,FILACT(JFN)
+	JRST [	PUSHJ P,TSTRB
+		JRST RETY6]
+	TLZ B,700000
+	PUSHJ P,DNOUT
+RETY6:	TEST(NE,DIRFF)		; Directory being specified?
+	JRST   [CHOUT(74)	; Yes, prefix bracket
+		JRST .+1]
+	PUSHJ P,ENDSTR
+	HRRZ B,A
+	MOVE C,FILCNT(JFN)
+	CAIE C,MAXLC
+	PUSHJ P,TSTRB
+	TEST(NN,STARF)
+	POPJ P,
+	>		; End IFE SMXGTJ conditional
+
+TYSTR:	TMSG (/*/)
+	POPJ P,
+
+; Terminator seen, finish up
+
+ENDALL:	TEST(O,NREC)		; Suppress recognition
+	TEST(NN,STRF)		; NO "ECHO" IF TERMINATOR FROM STRING
+	TEST(NE,CFRMF)
+	JRST ENDALZ
+	TEST(NN,PONFF,RTYPF)
+	CAIL A,40
+	JRST ENDALZ
+	MOVE B,[BYTE (2)0,0,0,0,0,0,0,0,0,0,2,0,0,2,0,0,0,0]
+	MOVE C,[BYTE (2)0,0,0,0,0,0,0,0,0,0,0,0,0,2]
+	PUSH P,A
+	PUSHJ P,SFCC
+	POP P,B
+	PUSHJ P,OUTCH
+	PUSHJ P,SFCC0
+	JRST ENDALZ
+
+RECALL:	TLNE F1,DIRSF!NAMSF!EXTSF!VERSF!STARF
+	 TEST(O,NREC)
+ENDALZ:	TEST(NE,STARF)
+	PUSHJ P,[TEST(NN,NAMF)
+		JRST ENDNAM
+		JRST ENDEXT]
+	MOVE C,FILCNT(JFN)
+	CAIE C,MAXLC		; Is input string null?
+	JRST [
+IFN SMXGTJ,<
+		TEST(NE,EXTF)	; Extension yet?
+		TEST(O,NREC)	; Yes, make sure no more recognition
+	>
+		PUSHJ P,RECFL0	; No. recognize field first
+		JRST GTJF2	; Ambiguous
+		JRST .+1]
+	TEST(NE,NAMF)		; Do we have a name?
+	JRST ENDAL0		; Yes.
+	PUSHJ P,DEFNAM		; No, try the default name
+	JRST [	PUSHJ P,RECNAM	; No default, try recognizing null
+		JRST GTJF2	; Ambiguous
+		JRST ENDAL0]	; Ok, found
+ENDAL0:	TEST(NE,EXTF)		; After all that, do we have ext?
+	JRST ENDAL4		; Yes
+IFN SMXGTJ,<
+	TEST(NN,DIRSF,NAMSF)	; Use extension default if wild card
+	>
+	TEST(NN,EXTFF)
+	PUSHJ P,DEFEXT		; Attempt to default extension
+	JRST ENDAL6
+ENDAL4:	TEST(NN,VERF)		; Do we have a version?
+	PUSHJ P,DEFVER		; No, default it
+	TEST(NN,NEWF,NEWVF)
+	JRST ENDAL7
+	TEST(NN,PRTF)		; Do we have protection?
+	PUSHJ P,DEFPRT		; No, default it
+	TEST(NN,ACTF)		; Do we have an account?
+	PUSHJ P,DEFACT		; No, default it
+ENDAL7:	TEST(NE,RTYPF)		; User request retyping name?
+IFE SMXGTJ,<
+	PUSHJ P,RETYPE		; Yes, do it
+	>
+IFN SMXGTJ,<
+	JRST   [HRRZ B,FILEXW(JFN)	; Do full fledged retype now
+		MOVSI C,LITRF		; Clear literal flag
+		ANDCAM C,BLKFG(B)
+		PUSHJ P,RETYPE		; And retype the file name
+		JRST .+1]
+	>
+	TEST(NN,PONFF)		; User request print of old/new file etc
+	 JRST [	TEST(NN,CFRMF)	; NO, BUT IS CONFIRMATION WANTED?
+		 JRST ENDAL3	; NO, BYPASS THIS
+		JRST ENDALC]	; YES, PRING CONFIRM
+
+ENDAL1:	MOVE B,[BYTE (2)0,0,0,0,0,0,0,0,0,0,2,0,0,2,0,0,0,0]
+	MOVE C,[BYTE (2)0,0,0,0,0,0,0,0,0,0,0,0,0,2]
+	PUSHJ P,SFCC
+	HRROI B,[ASCIZ / [Old file]/]
+	TEST(NN,NVERF)
+	HRROI B,[ASCIZ / [Old version]/]
+	TEST(NE,NEWVF)		; Did we generate a new version?
+	HRROI B,[ASCIZ / [New version]/]
+	TEST(NE,NEWF)		; Did we generate a new file
+	HRROI B,[ASCIZ / [New file]/]
+	TEST(NN,NNAMF)
+	JRST ENDAL9
+	HRROI B,[ASCIZ / [OK]/]
+IFE SMXGTJ,<
+	TEST(NE,CFRMF)
+ENDALC:	HRROI B,[ASCIZ / [Confirm]/]
+ENDAL9:	TLNN F1,DIRSF!NAMSF!EXTSF!VERSF
+	>
+IFN SMXGTJ,<
+	TEST(NN,CFRMF)
+ENDAL9:	TLNE F1,DIRSF!NAMSF!EXTSF!VERSF	; Always confirm stars
+ENDALC:	HRROI B,[ASCIZ / [Confirm]/]
+	PUSH P,B		; Save ptr for now
+	MOVE A,B
+	HRRZ B,FILEXW(JFN)	; See if he wants this in typescript
+	MOVE C,BLKFG(B)
+	TRZE C,TPCNF
+	 JRST   [MOVEM C,BLKFG(B)  ; Make sure he only gets one copy
+		 PUSHJ P,RTSTR
+		 JRST .+1]
+	POP P,B			; Restore the pointer
+	>
+	PUSHJ P,TSTR		; Print it
+	PUSHJ P,SFCC0
+ENDAL3:	XCTUU [HLRZ A,1(E)]
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777
+	JRST ENDAL2		; No input file
+	TEST(NN,CFRMF)
+	JRST ENDAL2		; Or no confirmation requested
+IFN SMXGTJ,<
+	RFMOD			; Set to break on everything
+	TRZ B,777700
+	IORI B,174100
+	SFMOD
+	>
+	MOVE B,[BYTE (2)1,1,1,1,1,1,1,2,1,2,2,2,2,2,1,1,1,0]
+IFE SMXGTJ,<
+	MOVE C,[BYTE (2)1,1,1,1,1,1,0,1,1,1,1,1,1,2]
+	>
+IFN SMXGTJ,<
+	MOVE C,[BYTE (2)0,1,1,1,1,1,0,1,1,1,1,1,1,2]  ; Not ^R
+	>
+	PUSHJ P,SFCC
+	BIN			; Else read confirmation character
+	IDIVI B,^D36/CCSIZE
+	LDB B,CPTAB(B+1)	; Get character class
+	CAIN B,6
+	JRST [
+IFN SMXGTJ,<
+		RFMOD		; Have to start over, reset mode
+		TRZ B,777700	; To break on non-alpha
+		IORI B,164100
+		SFMOD
+	>
+		PUSHJ P,DELALL
+		JRST GTJF2]
+	CAIN B,4
+IFE SMXGTJ,<
+	JRST [	PUSHJ P,RETYPE	; And control-r
+		JRST ENDAL1]
+	>
+IFN SMXGTJ,<
+	JRST [	PUSHJ P,RETYPE	; And control-r
+		JRST ENDAL3]
+	>
+	CAIE B,7		; Terminator
+	CAIN B,10		; Or alt-mode
+	JRST ENDAL2		; Is ok
+	ERRLJF GJFX15		; Improper confirmation
+
+ENDAL2:
+IFN SMXGTJ,<
+	TEST(NE,NEWF,NEWVF)	; If old file or version, can't change
+				; prot, acct, or tempff
+	>
+	TEST(NE,ASTF)
+	 JRST ENDALS
+	TEST(NE,PRTF)		; Do we have a protection?
+	PUSHJ P,@PLUKD(DEV)	; Insert it into the directory
+	TEST(NN,ACTF)		; Do we have an account string?
+	 JRST [	TEST(NN,NEWVF,NEWF)	; No, but if new version
+		 JRST .+2
+		MOVE A,ACCTSL##	; In case we need this
+		MOVEM A,ACCTSR-1; Set it up
+		MOVE A,ACCTPT
+		CAML A,[500000000000]
+		CAMLE A,[577777777777]
+		 MOVEI A,ACCTSR-1
+		MOVEM A,FILACT(JFN)
+		PUSHJ P,@ALUKD(DEV)
+		SETZM FILACT(JFN)
+		JRST .+2]
+	PUSHJ P,@ALUKD(DEV)	; Yes, insert it into the directory
+	TEST(NN,NEWF,NEWVF)	; IF NOT NEW VERSION OR FILE
+	 JRST ENDALS		; SKIP FOLLOWING
+	MOVSI B,FDBTMP
+	TEST(NE,TMPFF)		; Is this file to be temp?
+	PUSHJ P,@SLUKD(DEV)
+ENDALS:	
+IFN SMXGTJ,<
+	PUSHJ P,TRMUTP		; Terminate user typescript if needed
+	>
+	NOINT
+	MOVEI A,JSBFRE
+	SKIPLE B,FILACT(JFN)
+	PUSHJ P,RELFRE		; Release storage used to hold account
+	SKIPLE B,FILPRT(JFN)
+	PUSHJ P,RELFRE		; And protection
+	HRRZ B,FILTMP(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; And temp
+	HLRZ B,FILTMP(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE
+IFN SMXGTJ,<
+	HRRZ B,FILEXW(JFN)	; Retype buffer
+	SKIPE B
+	PUSHJ P,RELFRE
+	>
+	SETZM FILTMP(JFN)
+	SETZM FILPRT(JFN)
+	SETZM FILACT(JFN)
+	SETZM FILOPT(JFN)
+	SETZM FILCNT(JFN)
+IFN SMXGTJ,<
+	HLLZS FILEXW(JFN)	; Clear retype buffer
+	>
+	AND STS,[XWD 100,0]	; Retain astf
+	IOR STS,FILSTS(JFN)	; Get rest of sts
+	TEST(Z,ASGF)		; Clear assign flag
+	TEST(O,NAMEF)		; Set name attached flag
+	TEST(NE,NACCF)
+	TEST(O,FRKF)
+	MOVEM STS,FILSTS(JFN)
+	PUSHJ P,INFTST
+	JRST ENDAL5
+	POP P,A
+	POP P,B
+	SFMOD
+	POP P,C
+	POP P,B
+	SFCOC
+
+ENDAL5:	OKINT
+	AOS (P)			; Done, skip return
+	LSH JFN,-SJFN		; Shift jfn from index to number
+	TLNN F,ASTAF!OSTRF!RLHFF; ARE LEFT HALF FLAGS WANTED?
+	 JRST ENDA51		; NO, SKIP THIS
+	TEST(NE,PRTTF)		; IF ;P SPECIFIED
+	 TEST(O,FXPRT)		; SAY SO
+	TEST(NE,ACTTF)		; LIKEWISE FOR ;A
+	 TEST(O,FXACT)
+	TEST(NE,TMPTF)		; AND ;T
+	 TEST(O,FXTMP)
+	HLL JFN,F1
+	TLZ JFN,STEPF!DFSTF!STARF!EXTXF; CLEAR FLAGS THAT DON'T GET RETURNED
+	TEST(NN,IGDLF)
+	 TLO JFN,(1B12)
+ENDA51:	UMOVEM JFN,1		; Return jfn to user
+	JRST MRETN		; And exit.
+
+ENDAL6:	
+IFE SMXGTJ,<
+	MOVEI B,"."
+	>
+	TEST(ON,EXTFF)
+	TEST(NE,NREC)
+	JRST .+3
+	TEST(NN,NNAMF)
+IFE SMXGTJ,<
+	PUSHJ P,OUTCH
+	>
+IFN SMXGTJ,<
+	 JRST   [CHOUT (".")	; Add a "."
+		 CHRTP (".")
+		 JRST .+1]
+	>
+	PUSHJ P,RECEXX
+	JRST [	
+IFN SMXGTJ,<
+		TLNE F1,DIRSF!NAMSF!EXTSF!STARF
+		 ERRLJF GJFX19
+	>
+		PUSHJ P,DEFEXT
+		JRST ERRDO
+		JRST ENDAL4]
+	JRST [	PUSHJ P,DING
+		JRST GTJF2]
+	JRST ENDAL4
+IFN SMXGTJ,<
+; Routines to handle user question mark input.  If there is a non TTY
+; on input or a non-JFN output, it returns immediately.  Otherwise it
+; lists candidates for the field currently being entered assuming no
+; previous field had a wild card entered.  If no candidates are found,
+; GTJFN breaks on an error.
+
+QUEST:	HRRZ B,FILEXW(JFN)	; OK, save the retype buffer status
+	MOVE A,BLKCT(B)		; Anything typed yet?
+	CAIL A,MAXRC
+	 ERRLJF GJFX34		; No, then break on "?"
+	MOVE A,BLKFG(B)		; Get user flags
+	TLNN A,USRTY		; User typescript?
+	 JRST QUEPSH		; No, just go save retype context
+	XCTUU [MOVE A,TPPTR(E)]	; Yes, get his real typescript data and
+	PUSH P,A		; save it for later
+	XCTUU [MOVE A,TPCNT(E)]
+	PUSH P,A
+QUEPSH:	PUSH P,BLKBP(B)
+	PUSH P,BLKCT(B)
+	PUSH P,BLKFG(B)
+	PUSH P,USRBP(B)
+	PUSH P,USRCT(B)
+
+	PUSHJ P,GSIBE		; Check for anything in input (OR NON-TTY)
+	 JRST QUEST2		; Oops, wants us back
+	XCTUU [HRRZ A,1(E)]	; Check for output JFN
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777
+	 JRST QUEST2		; Can't do it
+	TEST(NN,DEVF)		; Device specified?
+	 PUSHJ P,DEFDEV		; No, get a default
+	MOVE B,DLUKD(DEV)	; Has to be multi dir
+	CAIE B,MDDDIR
+	 JRST QUEST2		; Oops, ding him and restart
+
+	MOVE B,[BYTE (2)0,0,0,0,0,0,0,2,0,0,2,0,0,2,0,0,0,0]
+	MOVE C,[BYTE (2)0,0,0,0,0,0,0,0,0,0,0,0,0,2]
+	PUSHJ P,SFCC		; Output CRLF, EOL, and bells
+	TEST(O,NREC)		; Suppress other printout
+	MOVEI A,"?"		; Fix user's typescript in case error
+	PUSHJ P,USRCH		; Show he typed ?
+	PUSHJ P,TRMUTP		; Terminate it
+	HRRZ A,FILEXW(JFN)	; And turn off more typescript for now
+	MOVSI B,USRTY
+	ANDCAM B,BLKFG(A)
+
+; OK, here we can help him.  See what is being entered.
+
+	TEST(NE,DIRFF)		; Entering directory?
+	 JRST QDIR		; Yes
+	TEST(NE,EXTFF)		; Extension?
+	 JRST QEXT		; Yes
+	TEST(NN,NAMF)		; Have a name?
+	 JRST QNAM		; No, must be entering it
+	TEST(NN,VERF)		; Have a version?
+	 JRST QVER		; No, must be entering it
+
+QUEST0:	PUSHJ P,GSIBE		; Anything typed?
+	 SKIPA			; Yes, eat it
+	JRST QUEST3		; No, just retype and return
+QUEST1:	XCTUU [HRRZ A,1(E)]	; Something was typed to stop output
+	CFOBF			; Clear output buffer
+	XCTUU [HLRZ A,1(E)]	; Then point to input and
+	RFMOD			; Break on everything so we can eat it
+	PUSH P,B
+	TRZ B,777700
+	IORI B,174100
+	SFMOD
+	BIN			; Get the input and throw it away
+	POP P,B			; Reset mode word
+	SFMOD
+QUEST2:	PUSHJ P,DING		; Can't help in any later fields
+QUEST3:	HRRZ B,FILEXW(JFN)	; Restore retype buffer status
+	POP P,USRCT(B)
+	POP P,USRBP(B)
+	POP P,BLKFG(B)
+	POP P,BLKCT(B)
+	POP P,BLKBP(B)
+	MOVE A,BLKFG(B)		; Get user flags
+	TLNN A,USRTY		; User typescript?
+	 JRST QUEST4		; No, just go do the retype and rescan
+	POP P,A			; Yes, recover his real typescript data
+	XCTUU [MOVEM A,TPCNT(E)]  ; and restore it in his block
+	POP P,A
+	XCTUU [MOVEM A,TPPTR(E)]
+QUEST4:	PUSHJ P,RETYPE		; Go retype the input text
+	JRST RESCAN		; And rescan to reinit processing
+
+; Routine to add a "*" to buffers.
+
+QSTAR:	MOVEI A,"*"
+	PUSHJ P,LTR		; Put it in FILTMP
+	PUSHJ P,RTPCH		; And retype buffer (to rescan wild card)
+	TEST(O,STARF)
+	TEST(O,ASTAF)		; Make the * legal for now
+	TEST(Z,OUTPF,NEWNF)	; Only look for old files
+	TEST(O,OLDNF)
+	POPJ P,
+
+; Routine to print out a line
+; Entry: A = address of string block
+; Call:	PUSHJ P,QNXTL
+; Clobbers A,B,C
+
+QNXTL:	PUSH P,A		; Save block adr for now
+	TMSG </
+  />
+	POP P,B
+	PUSHJ P,TSTRB		; Output string
+	POPJ P,
+
+
+; The following string of routines sets up wild card names for missing
+; fields.
+
+QSDIR:	PUSHJ P,QSTAR		; Add a star
+	PUSHJ P,ENDDIR		; And find a directory
+QSNAM:	PUSHJ P,QSTAR		; Add a star
+	PUSHJ P,ENDNAM		; And find a name
+QSEXT:	PUSHJ P,QSTAR		; Add a star
+	PUSHJ P,ENDEXT		; And find an extension
+QSVER:	PUSHJ P,QSTAR		; Make a star version
+	PUSHJ P,ENDEXT		; And find a version
+	POPJ P,			; Return
+
+; Here we had a ? while entering a directory
+
+QDIR:	PUSHJ P,QSDIR		; Add a star to what's there and find
+				; at least one file
+QDIR0:	PUSHJ P,GSIBE		; Any input?
+	 JRST QUEST1		; Yes, retype and continue
+	PUSHJ P,GDNAME		; Get the directory name
+	 ERRLJF GJFX17		; Shouldn't happen
+	HLRZ A,FILTMP(JFN)	; Print it on the next line
+	PUSHJ P,QNXTL
+	PUSHJ P,QVDIR0		; Now look for the next directory
+	 JRST QUEST0		; None left, retype
+	JRST QDIR0		; Go print it
+
+
+; Here we had a ? while entering a name
+
+QNAM:	TEST(NE,DIRSF)		; Any directory stars?
+	 JRST QUEST2		; Yes, can't help him
+	PUSHJ P,QSNAM		; Go resolve at least one file
+QNAM0:	PUSHJ P,GSIBE		; Anything input?
+	 JRST QUEST1		; Yes, quit
+	HLRZ A,FILNEN(JFN)	; Print this name
+	PUSHJ P,QNXTL
+	PUSHJ P,QVNAM0		; Now look for the next name
+	 JRST QUEST0		; None left, beep and retype
+	JRST QNAM0		; go print it
+
+
+
+; Here we had a ? while entering an extension
+
+QEXT:	TEST(NE,DIRSF,NAMSF)	; Any directory or name stars?
+	 JRST QUEST2		; Yes, can't help him
+	PUSHJ P,QSEXT		; Go resolve at least one file
+QEXT0:	PUSHJ P,GSIBE		; Anything input?
+	 JRST QUEST1		; Yes, quit
+	HRRZ A,FILNEN(JFN)	; Print this name
+	MOVE B,1(A)		; Look at the first word of the string
+	TLNE B,774000		; If it is not null (first char 0)
+	 JRST QEXT1		; Print it as is
+	MOVEI A,[ASCIZ / [Null]/]  ; Otherwise dummy an entry
+	SUBI A,1		   ; Set up as string block
+QEXT1:	PUSHJ P,QNXTL
+	PUSHJ P,QVEXT0		; Now look for the next extension
+	 JRST QUEST0		; None left, beep and retype
+	JRST QEXT0		; go print it
+
+
+; Here we had a ? while entering a version
+
+QVER:	TLNE F1,DIRSF!NAMSF!EXTSF   ; Any dir, name, or ext stars?
+	 JRST QUEST2		; Yes, can't help him
+	PUSHJ P,QSVER		; Go resolve at least one file
+QVER0:	PUSHJ P,GSIBE		; Anything input?
+	 JRST QUEST1		; Yes, quit
+	TMSG </
+  />				; No, print this number
+	HRRZ B,FILVER(JFN)
+	PUSHJ P,DNOUT
+	PUSHJ P,QVVER0		; Now look for the next version
+	 JRST QUEST0		; None left, beep and retype
+	JRST QVER0		; go print it
+
+
+; The following has entries for Dir, Name, Ext, and Version which step
+; The appropriate field and assures that at least one file is accessible
+; with the new field value.
+; Returns  +1 if none is found
+;	   +2 if successful
+
+QVDIR0:	TEST(O,DIRSF,STEPF)	; Step the current directory number
+	HRRZ A,FILDDN(JFN)
+	PUSHJ P,@DLUKD(DEV)
+	 JFCL
+	 POPJ P,		; No more, return +1
+	HRRM A,FILDDN(JFN)	; Got one, store the new dir num
+	PUSHJ P,USTDIR		; Release the directory
+	PUSHJ P,QVNAM		; Now look for acceptable name, ext, ver
+	 JRST QVDIR0		; None for this dir, step it
+	JRST SKPRET		; Got one, return +2
+
+QVNAM:	SETZ A,			; Find the first name this dir
+	JRST QVNAM1
+QVNAM0:	HLRZ A,FILNEN(JFN)	; Step the current name
+	PUSHJ P,LKPTR		; Need a lookup ptr
+QVNAM1:	TEST(O,NAMSF,STEPF)
+	PUSHJ P,NAMLKX		; Find the next one
+	 JFCL
+	 POPJ P,		; No more, return +1
+	NOINT
+	HRRZ A,FILTMP(JFN)	; Got one, exchange old name block
+	HLRZ B,FILNEN(JFN)	; and new one
+	HRLM A,FILNEN(JFN)
+	HRRM B,FILTMP(JFN)
+	OKINT
+	PUSHJ P,SETTMP		; And reinit FILTMP ptr
+	PUSHJ P,QVEXT		; Now look for acceptable ext and ver
+	 JRST QVNAM0		; None for this name, step it
+	JRST SKPRET		; Got one, return +2
+
+QVEXT:	SETZ A,			; Find the first ext this name
+	JRST QVEXT1
+QVEXT0:	HRRZ A,FILNEN(JFN)	; Step the current extension
+	PUSHJ P,LKPTR		; Need a lookup ptr
+QVEXT1:	TEST(O,EXTSF,STEPF)
+	PUSHJ P,EXTLKX		; Find the next one
+	 JFCL
+	 POPJ P,		; No more, return +1
+	NOINT
+	HRRZ A,FILTMP(JFN)	; Got one, exchange old ext block
+	HRRZ B,FILNEN(JFN)	; and new one
+	HRRM A,FILNEN(JFN)
+	HRRM B,FILTMP(JFN)
+	OKINT
+	PUSHJ P,SETTMP		; And reinit FILTMP ptr
+	PUSHJ P,QVVER		; Now look for acceptable ver
+	 JRST QVEXT0		; None for this ext, step it
+	JRST SKPRET		; Got one, return +2
+
+QVVER:	SETZ A,			; Find the first version this ext
+	JRST QVVER1
+QVVER0:	HRRZ A,FILVER(JFN)	; Step the current version
+QVVER1:	TEST(O,VERSF,STEPF)
+	PUSHJ P,GTVER		; Go find next one and check access
+	 POPJ P,		; None, return +1
+	JRST SKPRET		; Finally we have an acceptable one
+				; Return +2
+
+
+; Routine to skip if input buffer is empty - if a JFN.  If not JFN,
+; never skips.
+;
+; Call:	PUSHJ P,GSIBE
+; Clobbers A
+
+GSIBE:	PUSHJ P,INFTST		; Check input JFN
+	 POPJ P,		; Nope, return +1
+	SIBE
+	 POPJ P,
+	AOS 0(P)
+	POPJ P,
+
+
+; Routine to compute a lookup pointer for a string block:
+; IOWD number of words,first word. 
+; Entry:  A = Address of block
+; Call:	PUSHJ P,LKPTR
+; Return +1 with lookup pointer in A
+; Clobbers A,B,C
+
+LKPTR:	HRRZI B,1(A)		; Address of start of string
+	HRLI B,440700		; Make it a pointer
+	ILDB C,B		; Find end of string
+	JUMPN C,.-1
+	HRRZ C,A		; Start of block
+	SUBI C,-1(B)		; -number of words
+	HRL A,C			; Make A an IOWD
+	POPJ P,
+
+
+; Routine to fetch a directory name string, given the directory number
+; Entry: Directory number in RH(FILDDN)
+; Call:	PUSHJ P,GDNAME
+; Return +1  Name not found
+;	 +2  Name found and string in temp temp block - LH(FILTMP)
+; Clobbers A,B,C,D
+
+GDNAME:	PUSHJ P,SELTMP		; Get a block
+	HRRZ A,FILDDN(JFN)	; Dir number to find
+	 JUMPE A,GDNAM0		; None there
+	PUSHJ P,GDIRST		; Find the name
+	 JRST GDNAM0		; Error, not found
+	HLRZ B,FILTMP(JFN)	; Ptr in A, move it to tmp tmp
+	PUSHJ P,BBLT
+	PUSHJ P,USTDIR		; Unlock the directory
+	AOS 0(P)		; And return +2
+	POPJ P,
+
+GDNAM0:	PUSHJ P,RELTMP		; Bad news, release the temp temp block
+	POPJ P,			; And return +1
+
+
+; Routine to BLT a block from one place to another
+; Entry:  A = Address of source block
+;	  B = Address of destination block
+; Call:	PUSHJ P,BBLT
+; Return +1 always
+; Clobbers A,B,C,D
+
+BBLT:	HRRE C,0(A)		; Get origin block size
+	HRRE D,0(B)		; And the dest block size
+	CAMLE C,D		; Pick the smallest
+	MOVE C,D
+	HRLI A,1(A)		; Make BLT pointer
+	HRRI A,1(B)
+	ADDI B,-1(C)		; Stopping location
+	CAILE C,1		; If non-trivial block, do copy
+	BLT A,0(B)		; Move it
+	POPJ P,
+
+	>	; End IFN SMXGTJ conditional
+
+; Star typed
+
+IFE SMXGTJ,<
+STAR:	MOVE C,FILCNT(JFN)
+	TEST(NE,ASTAF)
+	CAIE C,MAXLC		; Any characters typed?
+	ERRLJF GJFX31		; Illegal *
+	TEST(NE,OSTRF)
+	TEST(O,ASTF)		; Set * bit in sts
+	TEST(O,STARF)
+	POPJ P,
+	>
+IFN SMXGTJ,<
+STAR:	TEST(NE,OSTRF)		; If output stars,
+	TEST(O,ASTF)		; Set * bit in sts
+	TEST(O,STARF)		; And note this wild card
+	 JRST LTR		; Otherwise, add the char to buffers
+	>
+
+; Set up temp string block for this jfn
+; Call:	JFN IN JFN
+;	JSYS SETTMP
+; Sets up filopt(jfn) and rh(filtmp(jfn)) and filcnt(jfn)
+; Clobbers a,b,c
+; Clears num
+
+SETTMP:	HRRZ A,FILTMP(JFN)	; Is block assigned?
+	JUMPN A,SETTM1		; Yes, use it
+	MOVEI B,MAXLW+1
+	NOINT
+	PUSHJ P,ASGJFR		; Assign a free storage area in psb
+IFE SMXGTJ,<
+	ERRLJF GJFX22		; No room
+	>
+IFN SMXGTJ,<
+	 JRST   [OKINT		; No room
+		 ERRLJF GJFX22]
+	>
+	HRRM A,FILTMP(JFN)	; Save in tmpptr
+	OKINT
+SETTM1:	HRLI A,(<POINT 7,0>)
+	AOS A
+	MOVEM A,FILOPT(JFN)	; Set filopt(jfn)
+	MOVEI A,MAXLC
+	MOVEM A,FILCNT(JFN)
+	MOVEI NUM,0		; Clear number
+	TEST(Z,NEGF)
+	POPJ P,
+
+
+IFN SMXGTJ,<
+; Set up temporary TMP storage using the left half of FILTMP
+
+SELTMP:	HLRZ A,FILTMP(JFN)	; Is anything there now?
+	 JUMPN A,SELTM1		; Yes, keep it
+	MOVEI B,MAXLW+1		; No, make a new one
+	NOINT
+	PUSHJ P,ASGJFR
+	 JRST   [OKINT		; Bad luck
+		 ERRLJF GJFX22]
+	HRLM A,FILTMP(JFN)	; Got it - save location
+	OKINT
+SELTM1:	POPJ P,
+
+
+; Release the temporary TMP storage from the left half of FILTMP
+
+RELTMP:	MOVEI A,JSBFRE		; Free space location
+	HLRZ B,FILTMP(JFN)
+	NOINT
+	 SKIPE B		; If it is there
+	PUSHJ P,RELFRE		; Release it
+	HRRZS FILTMP(JFN)
+	OKINT
+	POPJ P,
+
+
+; Set up a retype buffer and user control flags.  Set up procedure
+; is like SETTMP but block has more entries:
+;
+; Word 1  = Header
+;      2  = Current byte ptr to last char entered in the block
+;      3  = Current count of chars that can be added to the buffer
+;		(excludes the terminating 0 - always room for that)
+;      4  = Current byte ptr into user typescript buffer
+;      5  = Current count of space remaining in user typescript buffer
+;      6  = Flags for non-std Dev or Dir and extended user output
+
+SETRTP:	HRRZ A,FILEXW(JFN)	; Get ptr to existing buffer if there
+	JUMPN A,SETRT0		; If already allocated, just init it
+	MOVEI B,MAXRW		; Need to allocate one, this many words
+	NOINT
+	PUSHJ P,ASGJFR
+	 JRST   [OKINT		; Bad luck
+		 ERRLJF GJFX22]
+	HRRM A,FILEXW(JFN)	; Got it, save the address
+	OKINT
+
+SETRT0:	MOVEI B,BLKDT(A)	; Set up starting string ptr
+	HRLI B,440700
+	MOVEM B,BLKBP(A)	; And save it
+	MOVEI B,MAXRC		; Set up max char count
+	MOVEM B,BLKCT(A)	; And save it
+	MOVSI C,LITRF		; Start with literal retype
+	TLNN E,777777		; Long GTJFN?
+	TEST(NN,LLTBF)		; Yes, long-long table set?
+	 JRST SETRT2		; No, just save what we have
+	XCTUU [HLR C,EXTWD(E)]	; Yes, get his added flags in RH of BLKFG
+	XCTUU [HRRE D,EXTWD(E)]	; And the number of following words
+	CAIGE D,2		; Enough for typescript stuff?
+	 JRST SETRT2		; No, forget it
+	XCTUU [MOVE B,TPPTR(E)]		; Yes, get user's string ptr
+	TLCN B,777777		; Any kind of ptr?
+	 JRST SETRT1		; No, try prompt ptr
+	TLCN B,777777		; If implicit, set it up
+	 HRLI B,440700
+IFN KIFLG,<
+	TLNE B,37		; If KI-10, can't have indir or index
+	 JRST SETRT1		; Bad news, ignore his request
+	>
+	MOVEM B,USRBP(A)	; Save his ptr in our buffer
+	XCTUU [SKIPG B,TPCNT(E)]	; Now look at his count
+	 MOVEI B,MAXRC		; If non-pos, use our default
+	MOVEM B,USRCT(A)	; Save his max count in our buffer
+	TLO C,USRTY		; And set bit to show he wants it
+
+SETRT1:	CAIGE D,3		; Enough for a prompt pointer?
+	 JRST SETRT2		; No, forget it
+	XCTUU [MOVE B,PRPTR(E)]		; Get his prompt pointer
+	TLCN B,777777		; Any kind of pointer?
+	 JRST SETRT2		; No, wrap it up
+	TLCN B,777777		; If implicit, set it up
+	 HRLI B,440700
+IFN KIFLG,<
+	TLNE B,37		; If KI-10, can't have indir or index
+	 JRST SETRT2		; Bad news, forget it
+	>
+	XCTUU [MOVEM B,PRPTR(E)]	; Give it back to him
+	TLO C,USRPR		; And set bit to show he has one
+
+SETRT2:	MOVEM C,BLKFG(A)	; Now store the bits
+	POPJ P,			; And return
+
+	>	; End of IFN SMXGTJ conditional
+
+; Get character from string of file
+; Call:	PUSHJ P,GCH
+; Return
+;	+1	; No more input
+;	+2	; Ok, in a, the character
+; Clobbers b
+
+GCH:
+IFN SMXGTJ,<
+	TEST(NN,RSCNF)		; Rescanning retype buffer?
+	 JRST GCH0		; No
+	HRRZ C,FILEXW(JFN)	; Get block ptr
+	MOVE B,BLKBP(C)		; And the current byte pointer
+	ILDB A,B		; Fetch a char
+	JUMPN A, [MOVEM B,BLKBP(C)   ; If not 0, save new ptr
+		  SOS BLKCT(C)	     ; And decrement available space
+		  JRST SKPRET]
+	TEST(Z,RSCNF)		; No more, clear rescan flag
+GCH0:
+	>	; End of IFN SMXGTJ conditional
+
+	TEST(NN,STRF)		; Does string exist?
+	JRST GCH1		; No, get from file
+IFN KAFLG,<
+	XCTUU [ILDB A,2]	; Get character increment byte ptr
+>
+IFN KIFLG,<
+	XCTUU [MOVE 2,2]	;BYTE PTR IN MON. SPACE
+	TLNE 2,37		;NO INDIRECT OR INDEXED
+	ERRLJF GJFX33
+	XCTUU [ILDB A,2]		;GET THE BYTE
+	XCTUU [MOVEM 2,2]	;PUT BACK UPDATED POINTER
+>
+	JUMPN A,SKPRET		; Return if non-null
+	TEST(Z,STRF)		; No more string input
+GCH1:	XCTUU [HLRZ A,1(E)]
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777		; Is there an input file?
+	POPJ P,			; No, error return
+	BIN			; Yes get a byte
+	MOVE A,B
+	AOS (P)
+	POPJ P,
+
+; Assign a jfn
+; Call:	PUSHJ P,ASGJFN
+; Return
+;	+1	; Error none available
+;	+2	; Ok, in jfn the jfn
+; Clobbers jfn
+
+ASGJFN:	NOINT
+	LOCK JFNLCK
+	MOVN JFN,MAXJFN		; Get current max jfn
+	HRLZS JFN		; Form aobjn pointer
+	JUMPGE JFN,ASGJF2	; Run out of jfns
+ASGJF0:	SKIPN FILSTS(JFN)
+	 JRST ASGJF3		; This one is free
+ASGJF5:	ADD JFN,[XWD 1,1_SJFN]
+	JUMPL JFN,ASGJF0
+ASGJF2:	CAIL JFN,RJFN
+	 JRST ASGJF4
+	SUB JFN,[XWD 1,0]
+	AOS MAXJFN
+ASGJF3:	HRRZ A,JFN
+	CAIE A,101_SJFN
+	CAIN A,100_SJFN
+	 JRST ASGJF5		; Primary io designator is skipped
+	AOS (P)
+ASGJF1:	HRLI JFN,ASGF
+	HLLZM JFN,FILSTS(JFN)	; Mark this jfn as assigned
+	HRRZS JFN
+	HRRZ A,FORKN		; Get fork number
+	HRLZM A,FILVER(JFN)
+	SETZM FILTMP(JFN)
+	SETZM FILDDN(JFN)
+	SETZM FILNEN(JFN)
+IFN SMXGTJ,<
+	SETZM FILDNW(JFN)	; Clear Dir and Name wild cards
+	SETZM FILEXW(JFN)	; Clear retype buffer
+	>
+	SETOM FILLCK(JFN)
+ASGJF4:	UNLOCK JFNLCK
+	OKINT
+	POPJ P,
+
+IFN SMXGTJ,<
+; The following routine is entered on error.  It makes sure the user
+; typescript is usable if requested and then releases the JFN.
+; Call:	PUSHJ P,ENDJFN
+
+ENDJFN:	PUSHJ P,TRMUTP		; Terminate user typescript if needed
+	JRST RELJFN		; And then release JFN
+
+TRMUTP:	MOVEI A,0		; Make sure user's typescript has 0
+	PUSHJ P,USRCH
+	HRRZ A,FILEXW(JFN)	; Get the retype buffer ptr
+	SKIPG A			; if one still there
+	 POPJ P,
+	MOVE C,BLKFG(A)		; and give typescr ptr and count back to
+	TLNN C,USRTY		; the user if he wanted it
+	 POPJ P,
+	MOVE B,USRBP(A)
+	XCTUU [MOVEM B,TPPTR(E)]
+	MOVE B,USRCT(A)
+	XCTUU [MOVEM B,TPCNT(E)]
+	POPJ P,
+
+	>	; End of IFN SMXGTJ conditional
+
+; Release jfn
+; Call:	IN JFN, JFN
+;	PUSHJ P,RELJFN
+; Clobbers a,b,c,d
+
+RELJFN::NOINT
+	LOCK JFNLCK
+	SKIPN FILSTS(JFN)
+	JRST RELJF2		; Already released
+	MOVEI A,JSBFRE
+	HLRZ B,FILDDN(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release device string block
+	HLRZ B,FILNEN(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release name string block
+	HRRZ B,FILNEN(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release extension string block
+IFN SMXGTJ,<
+	HLRZ B,FILDNW(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release Directory wild card block
+	HRRZ B,FILDNW(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release Name wild card block
+	HLRZ B,FILEXW(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release Extension wild card block
+	>
+	MOVE B,FILSTS(JFN)
+	TLNN B,ASGF		; Was this jfn being assigned?
+	JRST RELJF2		; No, skip the following
+	HRRZ B,FILTMP(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release temp block
+	HLRZ B,FILTMP(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE
+IFN SMXGTJ,<
+	HRRZ B,FILEXW(JFN)
+	SKIPE B
+	PUSHJ P,RELFRE		; Release retype buffer
+	>
+	MOVE B,FILPRT(JFN)
+	JUMPE B,RELJF1
+	TLNN B,777777
+	PUSHJ P,RELFRE		; Release space for protection block
+RELJF1:	MOVE B,FILACT(JFN)
+	JUMPE B,RELJF2
+	TLNN B,777777
+	PUSHJ P,RELFRE		; Release storage for account string
+RELJF2:	SETZM FILDDN(JFN)
+	SETZM FILNEN(JFN)
+	SETZM FILPRT(JFN)
+	SETZM FILACT(JFN)
+	SETZB STS,FILSTS(JFN)
+IFN SMXGTJ,<
+	SETZM FILDNW(JFN)
+	SETZM FILEXW(JFN)
+	>
+	SETOM FILLCK(JFN)
+	UNLOCK JFNLCK
+	OKINT
+	POPJ P,
+
+; Terminate string
+; Call:	FILOPT(JFN)	; Addresses last byte of string
+;	RH(FILTMP(JFN))	; Addresses beginning of string block
+;	PUSHJ P,ENDSTR
+; Returns with a null deposited on the end of the string and
+; In a, a pointer to the string as required by the recognition routines
+; Does not modify filopt(jfn), clobbers a,b
+
+ENDSTR::MOVE A,FILOPT(JFN)
+	MOVEI B,0
+	IDPB B,A		; Append null to string
+	SUB A,FILTMP(JFN)
+	MOVNI A,-1(A)		; Number of full words instring
+	HRL A,FILTMP(JFN)
+	MOVSS A			; Yields iowd # fuul words, first word
+	POPJ P,
+
+; Trim temp storage block and return excess to free store pool
+; Call:	FILOPT(JFN)	; Addresses the last byte of the string
+;	RH(FILTMP(JFN))	; Addresses the beginning of the string block
+;	PUSHJ P,ENDTMP
+; Returns in a, origin of the string block
+; Deposits a null byte on the end of the string
+; Returns excess storage in the block to free storage pool
+; Clears rh(filtmp(jfn))
+; Clobbers a,b,c,d
+; Leaves psi off
+
+ENDTMP:	MOVEI B,0
+	IDPB B,FILOPT(JFN)	; Deposit a null on the end
+	HRRZ A,FILTMP(JFN)	; Origin of block
+	MOVE B,FILOPT(JFN)
+	PUSHJ P,TRMBLK		; Trim excess from the block
+	NOINT
+	HRRZ A,FILTMP(JFN)
+	HLLZS FILTMP(JFN)
+	POPJ P,
+
+; Trim excess from a block and return it to free storage
+; Call:	A		; Origin of the block
+;	RH(B)		; Last location in block used
+;	PUSHJ P,TRMBLK
+; Clobbers a,b,c,d
+
+TRMBLK::MOVEI B,1(B)		; Loc of first unused word
+	HRRE C,(A)		; Original length of block
+	SUBI C,(B)
+	ADDI C,(A)		; Length of excess
+	JUMPLE C,CPOPJ		; No excess
+	NOINT
+	HRROM C,(B)		; Make residue into legit block
+	MOVNS C
+	ADDM C,(A)		; Shorten original block
+	MOVEI B,(B)
+	MOVEI A,JSBFRE
+	PUSHJ P,RELFRE		; Release the residue
+	OKINT
+	POPJ P,
+
+
+IFN SMXGTJ,<
+; Routine to copy a string from a trimmed block back to a full-sized
+; block, releasing the trimmed block.  Returns NOINT always.
+; Call:	A = address of trimmed block
+;	PUSHJ P,FULBLK
+; Returns with  A = new full sized block address
+; Clobbers A,B,C,D
+
+FULBLK:	NOINT
+	HRRZ b,0(A)		; Size of old block
+	CAIL B,MAXLW+1		; Full sized already?
+	 POPJ P,		; Yes, return
+	PUSH P,A		; No, save old block address
+	MOVEI B,MAXLW+1		; Get a new block of full size
+	PUSHJ P,ASGJFR
+	 JRST   [OKINT		; Bad luck, no more room
+		 ERRLJF GJFX22]
+	SETZM 1(A)		; Make sure at least one 0
+	MOVE B,A		; Set up to copy old block
+	MOVE A,0(P)
+	PUSH P,B
+	PUSHJ P,BBLT
+	POP P,B
+	MOVEI A,JSBFRE		; Done, now release the old one
+	EXCH B,0(P)
+	PUSHJ P,RELFRE
+	POP P,A			; And return the new adr in A
+	POPJ P,
+	>	; End SMXGTJ conditional
+
+
+; I-o routines for local use
+; Call:	B		; Pointer to string to be typed
+;	PUSHJ P,TSTRB	; If b addresses a string block
+; Or
+;	PUSHJ P,TSTR	; If b address the first byte
+; Outputs the string to the file specified in the call to gtjfn
+; Clobbers a,b
+
+TSTRB:	ADD B,[XWD 777777,1]
+TSTR:	XCTUU [HRRZ A,1(E)]
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777
+	POPJ P,
+	MOVEI C,0
+	SOUT
+	POPJ P,
+
+
+IFN SMXGTJ,<
+; Outputs a char to the retype buffer and to the user typescript.
+; Call:	A		; Character to be output
+;	PUSHJ P,RTPCH	; Output to both retype and user
+;	PUSHJ P,USRCH	; Output to user only
+;
+; Clobbers A,B,C
+
+RTPCH:	TEST(NE,RSCNF)		; If rescan pending, don't touch retype
+	 JRST USRCH		; Just go do the user typescript
+	HRRZ B,FILEXW(JFN)	; Get retype buffer address
+	SKIPG B			; Anything there?
+	 POPJ P,		; No, return
+	SOSGE BLKCT(B)		; Enough room?
+	 ERRLJF GJFX41		; No, bomb out
+	IDPB A,BLKBP(B)		; Yes, store it
+
+USRCH:	HRRZ B,FILEXW(JFN)	; Get retype buffer address (may enter here)
+	SKIPG B			; Anything there?
+	 POPJ P,		; No, return
+	MOVE C,BLKFG(B)		; And the flags
+	TLNN C,USRTY		; Typescript wanted and legal?
+	 POPJ P,		; No, return
+	SOSGE USRCT(B)		; Enough room?
+	 JRST   [TLZ C,USRTY	; No, turn off flag for more
+		 MOVEM C,BLKFG(B)
+		 XCTUU [SETOM TPCNT(E)]  ; Neg count to let him know
+		 POPJ P,]
+	MOVE C,USRBP(B)		; Get user byte ptr
+	XCTUU [IDPB A,C]	; Put the byte in his buffer
+	JUMPE A, [AOS USRCT(B)	; 0 byte, reset his count
+		  POPJ P,]	; And don't update the pointer
+	MOVEM C,USRBP(B)	; Resave byte ptr
+	POPJ P,
+
+
+; Outputs a string to the retype buffer and to the user typescript
+; Call:	A		; Address of the string block
+;	PUSHJ P,RTSTRB
+;
+;	A		; String pointer to source
+;	PUSHJ P,RTSTR
+;
+; Clobbers A,B,C,D
+
+RTSTRB:	HRROI A,1(A)		; Address string part of block
+RTSTR:	TLC A,777777		; If implicit, set it up
+	TLCN A,777777
+	 HRLI A,440700
+	HRRZ B,FILEXW(JFN)	; Address of retype buffer
+	SKIPG B			; Anything there?
+	 POPJ P,		; No, return
+	PUSH P,A		; Save copy of ptr for later
+	TEST(NE,RSCNF)		; Rescan in progress?
+	 JRST RTSTR1		; Yes, don't touch the retype buffer
+
+RTSTR0:	ILDB C,A		; Get input character
+	JUMPE C,RTSTR1		; End if 0
+	SOSGE BLKCT(B)		; Room for real char?
+	 ERRLJF GJFX41		; No, bomb out
+	IDPB C,BLKBP(B)		; Put char in retype buffer
+	JRST RTSTR0		; And do them all
+
+RTSTR1:	POP P,A			; Recover ptr to start of input string
+	MOVE C,BLKFG(B)		; Get retype flags
+	TLNN C,USRTY		; Typescript wanted
+	 POPJ P,		; No, return now
+	MOVE C,USRBP(B)		; Get byte ptr to user buffer
+RTSTR2:	ILDB D,A		; Get input char
+	JUMPE D,[MOVEM C,USRBP(B)	; Save user's byte ptr
+		 POPJ P,]
+	SOSGE USRCT(B)		; Room in user's buffer?
+	 JRST   [MOVEM C,USRBP(B)	; No, save current byte ptr
+		 MOVE C,BLKFG(B)	; Get flags
+		 TLZ C,USRTY		; Turn off flag for more
+		 MOVEM C,BLKFG(B)
+		 XCTUU [SETOM TPCNT(E)]  	; Neg count to let him know
+		 POPJ P,]
+	XCTUU [IDPB D,C]	; Put the byte in his buffer
+	JRST RTSTR2		; Go do them all
+
+	>	; End of IFN SMXGTJ conditional
+
+
+
+; Ding the bell
+; Call:	PUSHJ P,DING
+
+DING:	XCTUU [HLRZ A,1(E)]
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777
+	POPJ P,
+	MOVEI B,7		; Fall into outch to type a bell
+
+; Output character
+; Call:	B		; The character right justified
+;	PUSHJ P,OUTCH
+; Outputs the character on the file specified in the call to gtjfn
+; Clobbers a
+
+OUTCH:	XCTUU [HRRZ A,1(E)]
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777
+	POPJ P,
+	BOUT
+	POPJ P,
+
+INFTST:	XCTUU [HLRZ A,1(E)]
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777
+	POPJ P,
+	JRST SKPRET
+
+SFCC0:	MOVE B,[BYTE (2)1,0,1,1,1,1,0,2,1,0,0,1,0,0,1,1,1,1]
+	MOVE C,[BYTE (2)0,1,1,1,0,0,0,1,1,0,1,1,1,0]
+SFCC:	PUSHJ P,INFTST
+	POPJ P,
+	SFCOC
+	POPJ P,
+
+; Output number
+; Call:	B		; The number
+;	PUSHJ P,DNOUT	; For decimal output
+; Or
+;	PUSHJ P,ONOUT	; For octal output
+; Clobbers a,c
+
+DNOUT:	SKIPA C,[12]
+ONOUT:	MOVEI C,10
+	XCTUU [HRRZ A,1(E)]
+	TLNE E,777777
+	TLNE E,2
+	CAIN A,377777
+	POPJ P,
+	NOUT
+	POPJ P,
+	POPJ P,
+
+
+IFN SMXGTJ,<
+; Output a number to the retype buffer and the user typescript
+; Call:	B = number
+;	C = radix
+;	PUSHJ P,RTNOUT
+;
+; Clobbers A,B,C,D
+
+RTNOUT:	MOVEI A,1		; Compute biggest number
+	MOVEI D,NDIG		; this many digits
+RTNOU0:	IMUL A,C
+	SOJG D,RTNOU0
+
+	PUSH P,A		; Save divisor
+	PUSH P,B		; Number to be converted
+	PUSH P,C		; And the radix
+	SKIPGE B		; Negative value?
+	 JRST   [MOVMM B,-1(P)	; Convert to magnitude
+		 CHRTP("-")	; Put out sign
+		 JRST .+1]
+	MOVE A,-1(P)		; Fetch the number
+	CAML A,-2(P)		; Less than biggest?
+	 JRST   [RTPMSG("***")	; No, do stars
+		 JRST RTNOU3]
+RTNOU1:	PUSHJ P,GTDIG		; Go compute a digit
+	 JRST   [CHRTP("0")	; Just a 0
+		 JRST RTNOU3]
+	CAIN A,"0"		; Anything but 0?
+	 JRST RTNOU1		; No, look some more
+
+RTNOU2:	PUSHJ P,RTPCH		; OK, go type the char
+	PUSHJ P,GTDIG		; get another digit
+	 JRST RTNOU3		; No more, quit
+	JRST RTNOU2
+
+RTNOU3:	SUB P,[3,,3]		; Reset stack
+	POPJ P,
+
+
+; Routine to compute the next digit from data on the stack:
+; Call:	PUSHJ P,GTDIG
+;
+;   0(P) = return address
+;  -1(P) = radix
+;  -2(P) = current remainder
+;  -3(P) = current divisor
+;
+; Character returned in A and returns +2
+; If no more characters, returns +1
+
+GTDIG:	MOVE A,-2(P)		; Get current number
+	MOVE C,-3(P)		; Get current divisor
+	IDIV C,-1(P)		; Compute new divisor
+	SKIPG C
+	 POPJ P,		; Nothing left
+	MOVEM C,-3(P)		; Save new divisor
+	IDIV A,C		; Compute next char
+	MOVEM B,-2(P)		; Save new remainder
+	IORI A,60		; Convert to character
+	JRST SKPRET		; And return +2
+
+	>	; End of IFN SMXGTJ conditional
+
+
+
+; Process errors during gtjfn
+; Call:	A	; Error number
+;	JRST ERRDO
+
+ERRDO1:	MOVEM A,LSTERR		;COME HERE IF JFN NOT AT ALL SET UP
+	JRST ERRDO2
+ERRDO:	MOVEM A,LSTERR
+IFE SMXGTJ,<
+	PUSHJ P,RELJFN
+	>
+IFN SMXGTJ,<
+	PUSHJ P,ENDJFN
+	>
+	MOVE A,LSTERR
+ERRDO2:	UMOVEM A,1
+	PUSHJ P,INFTST
+	JRST MRETN
+	MOVE A,MPP
+	ADD A,[XWD 4,4]
+	MOVE P,A
+	POP P,A
+	POP P,B
+	SFMOD
+	POP P,C
+	POP P,B
+	SFCOC
+	JRST MRETN
+
+; Get next jfn
+; Call:	LH(1)	; Flags dirsf...hverf
+;	RH(1)	; Jfn
+;	GNJFN
+; Returns
+;	+1	; Error, jfn not attached to name, no more names
+;	+2	; Ok, the jfn refers to the next file in the directory
+
+IFN SMXGTJ,<
+; Mask of bits to keep from user file handle
+
+GNJMSK=DIRSF!NAMSF!EXTSF!VERSF!RVERF!HVERF!LVERF!FXPRT!FXACT!FXTMP!EXTXF
+	>
+
+.GNJFN::JSYS MENTR
+	HRRZ JFN,1
+	PUSHJ P,CHKJFN
+	ERR()
+	JFCL
+	ERR(DESX4)
+	TEST(NE,ASTF)
+	 ERUNLK(DESX7)			; Output stars not allowed
+	TEST(NN,OPNF)
+IFE SMXGTJ,<
+	JRST GNJFN1
+	ERUNLK(OPNX1)
+	>
+IFN SMXGTJ,<
+	JRST GNJFN0
+	ERUNLK(OPNX1)
+
+GNJFN0:	SETZB F,F1			; Clear flag bits
+	>
+GNJFN1:	SETZM FILTMP(JFN)
+	SETZM FILPRT(JFN)
+	SETZM FILACT(JFN)
+	SETZM FILOPT(JFN)
+IFE SMXGTJ,<
+	XCTUU [HLLZ F1,1]
+	UMOVE A,1
+	TLZ A,(37B16)
+	HRRZ A,FILVER(JFN)
+	TEST(O,STEPF)
+	MOVSI F,IGDLF
+	TEST(O,OLDNF)
+	>	; End SMXGTJ conditional
+IFN SMXGTJ,<
+	XCTUU [HLL F1,1]
+	AND F1,[GNJMSK,,DIRXF!NAMXF]	; Keep only defined bits
+	TEST(NN,NAMSF)			; Name steppable?
+	 JRST GNJF1A			; No, try extension
+	HLRZ A,FILNEN(JFN)		; Yes, make sure full-size block
+	PUSHJ P,FULBLK
+	HRLM A,FILNEN(JFN)		; Save full sized block
+	OKINT				; Restore interrupts
+GNJF1A:	TEST(NN,EXTSF)			; Extension steppable?
+	 JRST GNJF1B			; No, set/check flags
+	HRRZ A,FILNEN(JFN)		; Yes, make sure full size block
+	PUSHJ P,FULBLK
+	HRRM A,FILNEN(JFN)		; Save full sized block
+	OKINT				; Restore interrupts
+GNJF1B:	UMOVE B,1			; Do we allow deleted files?
+	TLNN B,(1B12)
+	TEST(O,IGDLF)			; Yes, set flag
+	TEST(O,OLDNF)			; Old files only
+	TEST(O,STEPF)			; And step to next one
+	HRRZ A,FILVER(JFN)		; Set up version specification
+	>	; End SMXGTJ conditional
+	TEST(NE,HVERF)
+	MOVNI A,1
+	TEST(NE,RVERF)
+	MOVNI A,0
+	TEST(NE,LVERF)
+	MOVNI A,2
+	TLNE F1,DIRSF!NAMSF!EXTSF!VERSF	; Stepping anything?
+IFE SMXGTJ,<
+	PUSHJ P,VERLUK
+	ERR(GNJFX2,<PUSHJ P,RELJFN>)
+	HRRM A,FILVER(JFN)
+	HRRZ A,NLUKD(DEV)
+	CAIE A,MDDNAM
+	 JRST [	SETZ A,
+		JRST GNJFN2]	; Not fdb for non-mdd devices
+	PUSHJ P,GETFDB
+	 JRST GNJFN1
+
+	PUSH P,A
+	HRLI A,10000
+	PUSHJ P,ACCCHK
+	 JRST [	PUSHJ P,USTDIR
+		POP P,A
+		JRST GNJFN1]
+	MOVSI A,READF
+	PUSHJ P,DIRCHK
+	 JRST [	PUSHJ P,USTDIR
+		POP P,A
+		JRST GNJFN1]
+	POP P,A
+	MOVE A,FDBCTL(A)
+	PUSHJ P,USTDIR
+GNJFN2:	UMOVE B,1
+	TLNN B,(1B12)
+	TLNN A,FDBDEL
+	 JRST [	TLNN B,(1B13)
+		TLNE A,FDBDEL
+		 JRST GNJFN1
+		JRST .+1]
+	>
+IFN SMXGTJ,<
+	PUSHJ P,GTVER		; Go try to find another file
+	 JRST	[PUSHJ P,RELJFN	; No more, release the JFN
+		 OKINT		; Reenable interrupts (from CHKJFN)
+		 ERR(GNJFX2)]	; And report the error
+	>
+	PUSHJ P,UNLCKF
+	SETZ A,
+	TEST(NE,DIRXF)
+	TLO A,(1B14)
+	TEST(NE,NAMXF)
+	TLO A,(1B15)
+	TEST(NE,EXTXF)
+	TLO A,(1B16)
+	XCTUU [HLLM A,1]
+	JRST SKMRTN
+
+	END
+
+
+
+
+

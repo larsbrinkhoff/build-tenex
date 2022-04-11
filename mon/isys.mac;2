@@ -1,0 +1,828 @@
+;<MON>ISYS.MAC;2    14-JAN-77 14:38:24    EDIT BY SWEER
+;MOVED INFBUF FROM DSKPAK, CHANGED FROM NGS TO NRP
+;<MON>ISYS.MAC;30    19-APR-76 14:33:06    EDIT BY SWEER
+;changed pstin jsys to allow tilde and right brace (175,176)
+SEARCH PROLOG,FILEDEF,STENEX
+TITLE ISYS
+
+;special monitor calls for setting system status
+
+IFN IMSSS,<
+internal .sceds,.scedr,.PBTIN >
+EXTERN MENTR,MRETN,CAPENB,BUGCHK
+EXTERN MJRSTF,HALTF1,LOG7,TODCLK
+
+DEFINE ERR(ERRORN,EXTRA)<
+JRST[	EXTRA
+	IFDIF <ERRORN>,<>,<MOVEI A,ERRORN>
+	JRST ERRD]>
+EXTERN ERRD
+RESCD
+R:	RET
+SWAPCD
+
+IFN IMSSS,<
+ls scedst,1		;three words of system status for login
+LS STUFLG,2		;BIT 0 MEANS STUDENT SCHEDULING
+			;***** THESE TWO VARIABLES HAVE TO BE IN
+			;***** IN THE SAME ORDER. DO NOT REORDER
+
+;read system status
+RESCD
+
+
+.scedr:	move 1,scedst
+	move 2,scedst+1
+	move 3,scedst+2
+	xct  mjrstf		;return to user
+
+	SWAPCD
+
+;set status
+
+.sceds:	jsys mentr
+	movei 6,wheel+oper
+	tdnn  6,capenb
+	jrst mretn		;must be enabled
+	movem 1,scedst
+	movem 2,scedst+1
+	movem 3,scedst+2
+	aos  0(p)		;skip return on success
+	jrst mretn
+
+
+EXTERN TTCVRT
+INTERN .TTCVT
+EXTERN TTULN,HSLUTL,HSLUT,TTULN
+TTUNIT==10	;DEFINED IN HSL
+
+.TTCVT:	JSYS	MENTR		;JSYS FOR CONVERTING HSL-TTY
+	SKIPGE  1		;ANY TTY NO
+	JRST TTCVX1		;NO
+	CAIL 1,CTYLIN
+	JRST TTCVX1		;ILLEGAL LINE NO
+	MOVE 2,1
+	CALL TTCVRT		;CONVERT TO HSL
+	LSH 2,11
+	IOR 2,3			;MAKE HSLTTY
+	UMOVEM 2,2		;RETURN
+TTCVX1:	SKIPGE 2
+	JRST MRETN		;NO HSL NO
+	MOVE 3,2
+	LSH 2,-11
+	ANDI 2,777
+	ANDI 3,777		;MASK BAD BITS
+	CAIL 2,NHSLS
+	JRST MRETN		;ILLEGAL HSL NO
+	MOVE TTUNIT,2
+	LDB 1,TTULN		;GET MAX LINES OF TTYS
+	CAML 3,1
+	JRST MRETN		;ILLEGAL TTY ON LINE
+	MOVE 1,HSLUTL(2)
+	ADD 1,3
+	UMOVEM 1,1		;RETURN TTY NO
+	ADD 3,HSLUT(2)
+	MOVE 1,(3)
+	UMOVEM 1,3		;RETURN LINE STATUS FOR TTY
+	JRST MRETN
+>;END OF IMSSS
+
+INTERN .DELCH
+
+;DELCH CALL: 1 JFN
+;RETURN +1 NOT TERMINAL
+;	+2 DISPLAY-LINE EMPTY
+;	+3 DISPLAY-DELETE DONE
+;	+4 NON-DISPLAY TERMINAL
+
+EXTERN TTDELO,CHKTC1
+.DELCH:	JSYS MENTR
+	UMOVE JFN,1
+	PUSHJ P,CHKTC1
+	JRST MRETN
+	HLRZ 2,DEV
+	PUSHJ P,TTDELO
+	JRST DCH4	;NON-DISPLAY OR BINARY MODE
+	JRST DCH2
+	JRST DCH3
+DCH4:	AOS (P)
+DCH3:	AOS (P)
+DCH2:	AOS (P)
+	JRST MRETN
+
+;string input jsys (psin)
+
+;arguments:	1. string pointer
+;		2. max. no of characters
+;		3. lh = flags bit 0: break on ctrls (exc. editing)
+;			 bits 10-17: timing in seconds for whole	
+;			 	     line (no timing if zero)
+;		   rh = bits 18-26:  special char to break on
+;			bits 27-35:  second special char to break on
+;		4. lh = no. of characters to skip on startup
+;		        if b2 of 3 set.
+;		   rh = break table address if b0 of 3 set.
+;		5. optional string pointer if b1 of 3 set.
+
+;table to control editing features
+
+ctrtab:	byte	(9)400,401,202,203
+	byte	(9)204,205,206,207
+	byte	(9)210,011,405,213
+	byte	(9)214,215,216,217
+	byte	(9)220,221,404,223
+	byte	(9)224,225,026,402
+	byte	(9)403,231,232,233
+	byte	(9)234,235,236,215
+
+xxx==40
+repeat 27,<
+	byte	(9)xxx,xxx+1,xxx+2,xxx+3
+	xxx=xxx+4   >
+
+	byte	(9)174,175,176,401
+
+
+ctrtae==.-ctrtab
+
+
+; string input routine
+
+	INTERN .PSTIN
+
+.pstin:	jsys	mentr
+	setz	15,0		;used for rfmod on backspace
+	MOVEI	1,100
+	RFMOD
+	PUSH	P,2		;SAVE MODES
+	TRO	2,17B23		;BREAK ON EVERYTHING
+	SFMOD
+	rfcoc
+	push	p,2
+	push	p,3
+	tlz	2,140000	;ctrl a
+	tlz	3,600360	;ctrl r,w,x
+	trz	3,600000	;altmod
+	sfcoc
+	time
+	push	p, 1		; -1(p) time
+	setz	7,0		;flag register
+	gjinf
+	movei	1,400000(4)
+	gttyp
+	andi	2,37		;test for imlac
+	cain	2,12
+	tlo	7,(1b16)	;imlac
+	cain	2,11
+	tlo	7,(1b15)	;OR TEC 
+	cain 	2,^d11
+	tlo 	7,(1b14)	;or DATAMEDIA
+	umove	5,1
+	hrlzi	1, 440700
+	jumpg	5, psin0
+	caml	5, [777777000000]
+	xctuu	[hllm	1, 1]
+psin0:	umove	4, 1		; string ptr
+IFN KAFLG,<TLZ 4,20>
+IFN KIFLG,<TLZ 4,37>
+	move	5,4		; starting pointer
+	umove	6,3		; get flags
+	umove	16,2		; get byte count
+	tlnn	6,(1b2)		;skip bytes
+	jrst	psin1		; no
+	move	10,5
+	umove	11,4
+	hlrz	11,11		; get byte count
+	jumple	11,psin1
+	sub	16,11		; update byte count left
+	call	bpplus		; add to byte pointer
+	move	4,11
+psin1:	skipg	16		; get total count
+	tlo	7,(1b0)		; set break
+psin2:	tlne	7,(1b0)		; break
+	jrst	psend
+IFN IMSSS,<
+	tlnn	6,777		; timing
+	jrst	[ pbin
+		  jrst psin22 ]
+	call	pstim		;check time
+psin25:	jrst	[ movei 1,222
+		  jrst psin24 ]
+	pbtin
+	cain	1,22
+	jrst	psin25
+>;END OF IMSSS
+IFE IMSSS,< PBIN>
+psin22:	ldb	2,[point 7,6,26]
+	ldb	3,[point 7,6,35]
+	caie	2,(1)
+	cain	3,(1)
+	tlo 	7,(1b0)		; break
+	idivi	1,4
+	tlnn	6,(1b0)		;break table specified
+	jrst	[ move 3,ctrtab(1)
+		  jrst psin23 ]
+	umove	3,4
+	addi	1,(3)
+	umove	3,(1)
+psin23:	xct	psinb(2)
+	trze	1,400
+	jrst	psin4		;special handling
+psin24:	call	pscha
+	jrst 	psin2		;loop
+
+psin4:	cail	1,psedl
+	setz	1,0
+	xct	psedr(1)
+	jrst	psin2		;loop
+
+
+psinb:	ldb	1,[point 9,3,8]
+	ldb	1,[point 9,3,17]
+	ldb	1,[point 9,3,26]
+	ldb	1,[point 9,3,35]
+
+psedr:	jfcl	0		;noop
+	call	psdel		;delete charachter
+	call	psbaw		;delete word
+	call 	psbal		;delete line
+	call	psret		;retype line
+	call	pslf		;special linefeed handling
+psedl==.-psedr
+
+
+bp1==10
+bp2==11
+cnt==11
+tmp1==12
+tmp2==13
+
+
+;	Add to byte pointer
+;	-------------------
+; Accepts:
+;	BP1:	Byte pointer
+;	CNT:	Byte count, must be at least -500000 (octal), and
+;			may not cause  BP1  to wrap around memory
+; Returns:
+;	BP1:	unchanged
+;	CNT:	Updated byte pointer such that "LDB" will work (at
+;		  least one "IBP" has been performed on the pointer)	
+;	CNT+1:	lost
+
+bpPlus:
+;=====
+	addi	cnt, 500004	; Add 100001 (full) words to make the 
+				;   count positive.  Assures non-
+				;   negative remainder in division.
+				;   One byte discrepency for initial IBP.
+	idivi	cnt, 5		; Divide it to full words
+				;   and left-over bytes (in  CNT+1)
+	subi	cnt, 100001	; Remove the added words
+	add	cnt, bp1	; CNT  becomes the new pointer
+	ibp	     cnt	; Add left-over byte
+	sojge	cnt+1, .-1	; All left-over bytes done?
+	popj	p,		;  Yes
+
+
+
+;	Decrement byte pointer
+;	----------------------
+; Accepts:
+;	BP1:	Byte pointer
+; Returns:
+;	BP1:	The byte pointer decremented by one byte
+
+dbp:
+;==
+	add	bp1, [xwd 70000,0]	; Put back one byte
+	tlne	bp1, 400000		; Owerflow to previous word?
+	 sub	bp1, [xwd 430000,1]	 ;  Yes, account for it
+	popj	p,
+
+
+;	Count bytes between two byte pointers
+;	-------------------------------------
+; Accepts:
+;	BP1:	First (from) byte pointer
+;	BP2:	Second (to) byte pointer
+; Returns:
+;	BP1:	unchanged
+;	BP2:	Byte count from  BP1  to  BP2
+;	TMP1:	lost
+;	TMP2:	lost
+
+countB:
+;=====
+	ldb	tmp1, [point 6,bp1,5]	; Bits to the right of byte 1
+	ldb	tmp2, [point 6,bp2,5]	; Bits to the right of byte 2
+	subi	tmp1, (tmp2)		; Bit difference
+	idivi	tmp1, 7			; Within-word byte difference
+
+	subi	bp2, (bp1)
+	hrre	bp2, bp2	; Full word difference
+	imuli	bp2, 5		; Convert it to byte difference
+	add	bp2, tmp1	; Add count derived form within-word bytes
+	popj	p,
+
+
+pscha:	tlze	7,(1b1)		;rubout in progress
+	jrst	[ push p,1
+		  movei 1,"]" 
+		  tlnn 7,(1B14+1B15+1b16) ; imlac OR TEC
+		  pbout
+		   pop p,1
+		  call psrmod
+		  tlnn 7,(1B14+1B15+1b16)
+		  pbout
+		  tlnn 7,(1b16)		;to correct prob of
+		  caie 1, 215		;cr terminating delete
+		   jrst .+1		;no prob on imlac
+		  movei 1, 12		;must have lf to get off
+		  pbout			;same line as delete
+		  movei 1, 215		;since only cr was sent
+		  jrst .+1 ]		;fixed 8-2-73 /ron
+IFN KAFLG,<TLZ 4,20>
+IFN KIFLG,<TLZ 4,37>
+	XCTBU	[idpb 1,4 ]
+	sosle 	16
+	trne	1,200		;break charachter
+	tlo	7,(1b0)		;yes
+	ret
+
+psdel:	move	10,5
+	move	11,4
+	call	countb		;how many left
+	jumpe	11,psbal	;none left-line delete
+	call	psmod		;set no echo
+	movei	1,"["
+	tlnn	7,(1b1+1B14+1B15+1b16)
+	pbout
+	tlo	7,(1b1)		;set rubout in progress
+	aos	16
+IFN KAFLG,<TLZ 4,20>
+IFN KIFLG,<TLZ 4,37>
+	XCTBU	[ ldb 1,4 ]	;get byte
+	cain	1,12
+	jrst	psdel2		;special handling for lf
+	tlne	7,(1B14+1B15+1b16)	;imlac OR TEC or datamedia
+	 JRST	[CALL	PSDELC		;;;MOVei 1,177
+		  JFCL		;ILLEGAL OR LINE EMPTY
+		 JRST	PSDEL1]
+	pbout
+psdel1:	move 	10,4
+	call 	dbp		;decr. byte pointer
+	move	4,10
+	ret
+
+psdel2:	hrroi	1,[asciz /^^
+/]
+	psout
+	jrst	psdel1
+
+psbaw:	trz	7,1		;backspace word
+	move	10,5
+	move	11,4
+	call	countb		;how many bytes left
+	jumpe	11,psbal
+	tlne	7,(1B14+1B15+1b16)	;imlac OR TEC or data media
+	jrst	psbaw1
+	hrroi	1,[asciz /__ /]
+	psout
+psbaw1:	IFN KAFLG,<TLZ 4,20>
+	IFN KIFLG,<TLZ 4,37>
+	XCTBU	[ ldb 1,4]
+	cain	1,12		;line feed is special
+	jrst	psbaw3
+	caie	1,40		;space
+	cain	1,11		;tab
+	jrst	[ trnn 7,1
+		  jrst .+2
+		  ret ]
+	tro 	7,1		;set char. found flag
+;;;	movei	1,177
+;;;	tlne	7,(1b16)	;imlac
+;;;	pbout
+	TLNN	7, (1B14+1B15+1B16)	;IMLAC OR TEC or datamedia
+	 JRST	PSBAW2
+	CALL	PSDELC		;DO DELETE
+	 JFCL		;DON'T WORRY IF EMPTY
+	
+psbaw2:	aos	16		;incr. byte count
+	move	10,4
+	call	dbp		;decr. byte pointer
+	move	4,10
+	move	10,5
+	move	11,4
+	call	countb
+	jumpn	11,psbaw1	;not done yet
+	ret
+
+psbaw3:	trne	7,1		;already char. found
+	ret			;yes, all done
+	hrroi	1,[asciz /^^
+/]
+	psout
+	jrst	psbaw2
+
+pslf:	movei 	1,15
+	pbout			;send line feed
+	movei 	1,12
+	jrst	pscha
+
+psmod:	tlne	7,(1b1+1B14+1B15+1b16)
+	ret			;not for imlac, TEC, or datamedia, or if in 
+				;rubout mode
+	movei	1,100
+	rfmod
+	move	15,2		;save in ac15
+	trz	2,3b25		;reset echo mode
+	sfmod
+	ret
+
+psrmod:	skipn	2,15		;echo mode saved
+	ret			;no
+	push 	p,1
+	movei	1,100
+	sfmod
+	setz	15,0		;reset flag
+	pop	p,1
+	ret
+
+PSDELC:	MOVEI	1, 101		;PRIMARY OUTPUT
+	DELCH
+	 JSR	BUGCHK		;+ 1 - NOT TTY - SHOULDN'T GET HERE
+	 RET			;+ 2 - EMPTY LINE, NO SKIP
+	 JRST	[AOS	(P)	;+ 3 -- SKIP IF DONE OK
+		 RET]
+;;;	JSR	BUGCHK		;+ 4 - IF NOT DISPLAY 
+	JFCL
+	RET			;A LOZER
+
+
+psbal:	umove 	4,1		;del line
+	move	5,4
+	umove	16,2
+psbal1:	movei 	1,"#"
+	pbout
+	pbout
+	movei	1,37
+	pbout
+	tlz	7,(1b1)		;reset rubout mode
+	call	psrmod		;reset echo mode
+	tlnn	6,(1b1)		;optioanal string
+	ret			;no
+	umove	2,5
+	jumpg	2,psbal2
+	caml	2,[ 777777000000 ]
+	hrli	2, 440700
+psbal2:	IFN KAFLG,<TLZ 2,20>
+	IFN KIFLG,<TLZ 2,37>
+	XCTBU	[ ildb 1,2 ]
+	jumpe	1,r
+	pbout
+	jrst	psbal2		;keep looping
+
+psret:	call	psbal1		;clean up at end of line
+	move	10,5
+	move	11,4
+	call	countb		;count bytes left
+	move	2,5
+psret1:	sojl	11,r		;no more
+IFN KAFLG,<TLZ 2,20>
+IFN KIFLG,<TLZ 2,37>
+	XCTBU	[ ildb 1,2 ]
+	cain	1,12		;line feed
+	movei	1,37		; make eol
+	pbout
+	jrst 	psret1
+
+psend:	umovem	4,1
+	umovem  16,2
+	pop p,1			;time
+	pop 	p,3
+	pop	p,2
+	movei	1,100
+	sfcoc			;reset tty modes
+	pop	p,2
+	sfmod
+	jrst	mretn
+
+
+
+IFN IMSSS,<
+pstim:	ldb	3, [point 8, 6, 17]		; do timing
+	time
+	sub	1, -1(p)
+	lsh	1, -^d10	; conv to seconds
+	sub	3, 1
+	jumple	3, pstim1
+	aos	0(p)		; double skip
+	move	1, 3		; return time lept
+pstim1:	ret
+>;END OF IMSSS
+
+
+;
+;RANDOM JSYS (FAST)
+;CLOBBERS USERS ACCUMULATORS 1,2
+;RETURNS RESULT IN 1
+
+INTERNAL .RAND
+LS RANOLD,1		;RANDOM NUMBER SEED
+
+.RAND:	SKIPN  RANOLD
+	JRST  RAND1		;INIT SEED
+	MOVEI  1,10405
+	MUL  1,RANOLD
+	SKIPN  2
+	MOVE  2,1
+	MOVEM 2,RANOLD
+	ASH  2,-10
+	TLO  2,200000
+	FADRI  2,0
+	MOVE  1,2
+	XCT  MJRSTF
+
+RAND1:	MOVE 1,TODCLK
+	ANDI  1,377773
+	MOVEM 1,RANOLD
+	JRST .RAND
+
+;PUTINF AND GETINF JSYS
+;IN 1=JOBNO OR -1 IF OWN JOB
+;IN 2: ADDRESS OF WHERE INFO COMES FROM OR GOES TO
+
+INTERNAL .PTINF,.GTINF
+;INFBUF DEFINED HERE . 40 WORDS OF STORAGE
+;DEFINED THERE BECAUSE IT SHOULD COME AFTER DSK BITTABLE
+
+NRP INFBUF,NJOBS*40	;defined here so it comes after bittable
+			;INFBUF USED BY .GTINF,.PTINF
+
+.PTINF:	JSYS MENTR
+	CAIL 1,NJOBS
+	JRST MRETN
+	CAIGE 1,0
+	MOVE 1,JOBNO
+	CAME 1,JOBNO		;OWN JOB
+	JRST [ MOVE 3,CAPENB
+		TRNN 3,WHEEL+OPER
+		JRST MRETN
+		JRST .+1 ]
+	IMULI 1,40		;40 WORDS OF STORAGE
+	ADDI 1,INFBUF
+	HRL 1,2
+	HRRZ 3,1
+	XCTUM [BLT 1,37(3) ]
+	AOS  0(P)		;SKIP RETURN
+	JRST MRETN
+
+.GTINF:	JSYS MENTR
+	CAIL 1,NJOBS
+	JRST MRETN
+	CAIGE 1,0
+	MOVE 1,JOBNO
+	CAME 1,JOBNO
+	JRST [ MOVE 3,CAPENB
+	 	TRNN 3,WHEEL+OPER
+		JRST MRETN
+		JRST .+1 ]
+	IMULI 1,40		;40 WORDS OF INFO
+	ADDI 1,INFBUF
+	HRL 2,1
+	HRRZ 3,2
+	XCTMU [BLT 2,37(3) ]	; GIVE TO USER
+	AOS 0(P)
+	JRST MRETN
+
+
+
+
+;JSYS'S FOR READING AND SETTING PRIORITIES
+;THE READING JSYS NOT IN PROLOG
+;GETTAB CAN BE USED TO READ PRIORITIES
+
+INTERN .SJPCT,.RJPCT
+EXTERN JOBQNT,JOBISK
+
+.RJPCT:	CAIGE 1,0
+	MOVE 1,JOBNO
+	CAIL 1,NJOBS
+	SETZ 1,0
+	MOVE 2,JOBQNT(1)	;ACC 2 HAS LEFT JOB QUANTUM
+	MOVE 1,JOBISK(1)
+	XCT MJRSTF
+
+.SJPCT:	JSYS MENTR		;SET PERCENT
+	CAIG 1,0		;HAS TO BE G. 0
+	MOVE 1,JOBNO		;FORCE TO OWN JOB
+	CAIL 1,NJOBS
+	JRST MRETN		;NO SKIP RETURN
+	TLNN 2,-1		;IF SETTING MAX HAS TO BE ENABLED
+	CAME 1,JOBNO		;NOT OWN JOB
+	JRST [ MOVE 3,CAPENB
+		TRNN 3,WHEEL+OPER
+		JRST MRETN	;CANT DO
+		JRST .+1 ]	;OK
+	HRRZ 3,2
+	HLRZ 2,2
+	CAIG 2,^D100		;MAX G THAN 100 %
+	SKIPN 2			;OR SET TO 0
+	HLRZ 2,JOBISK(1)	;GET OLD VALUE
+	SKIPE 3			;WORKING % G. 0
+	CAIGE 2,(3)		;MAX GE. WORKING
+	MOVEI 3,0(2)		;SET TO MAX
+	HRL 3,2
+	MOVEM 3,JOBISK(1)
+	AOS 0(P)		;SKIP RETURN
+	JRST MRETN
+
+
+IFN IMSSS,<
+;JSYS FOR EXECUTING DATAO,DATAI,CONO,CONI,CONSZ,CONSO
+;FOR DEVICES 500-534,600-634,700-734
+
+INTERN .DEVCT
+
+.DEVCT:	MOVEM 3,TW1	;ACC 3 WORKING SPACE
+	LDB 3,[POINT 3,1,12]
+	CAIE 3,0
+	CAIN 3,2	;DONT ALLOW BLKO,BLKI
+	JRST DEVCT1
+	LDB 3,[POINT 7,1,6]
+	SUBI 3,170		;CHECK FOR IO CONTROL
+	JUMPL 3,DEVCT1
+	TLNN 3,1		;WRONG CODE
+	TLNN 3,6
+	JRST DEVCT1	;NO
+	MOVEI 3,WHEEL
+	TDNE 3,CAPENB	;WHEEL
+	TLNE 1,37	;NO INDIRECT OR INDEXING
+	JRST DEVCT1
+	TRNE 1,777760	;ONLY ACCC ADDRESSING
+	JRST DEVCT1
+	HRRZ 3,FPC
+	CAIE 3,-1	;NOT 777777
+	AOS  FPC	;SKIP RETURN
+	MOVE 3,TW1	;RESTORE 3
+	XCT  1		;EXECUTE INSTRUCTION
+	XCT MJRSTF
+DEVCT1:	MOVE 3,TW1
+	XCT MJRSTF	;NO SKIP RETURN
+
+
+INTERN RUNDAT
+EXTERN CRSTAD
+
+DATAB:	POINT	1,3,1
+	POINT	4,3,5
+	POINT	36,4,35
+	POINT	2,3,7
+	POINT	4,3,11
+	POINT	36,4,35
+	POINT	36,6,35
+	POINT	36,7,35
+	POINT	36,5,35
+	POINT	4,3,15
+	POINT	4,3,19
+	POINT	4,3,23
+	POINT	4,3,27
+XDATAB=.-DATAB
+
+RUNDAT:	MOVSI 1,-10
+	DATAI 624,2
+	DATAI 624,3
+	CAMN 2,3
+	JRST RUNDA1
+	AOBJN 1,RUNDAT+1
+	RET			;NO LUCK
+RUNDA1:	XOR 3,[-1]		;CLOCK IS INVERTED
+	MOVSI 1,-XDATAB
+	MOVE 2,[POINT 7,10]	;STORE IN 10,11,12
+	HRROI 4,"/"-60
+	HRROI 5," "-60
+	MOVEI 6,"7"-60
+	MOVEI 7,"4"-60
+RUNDA2:	MOVE 14,DATAB(1)
+	LDB 14,14		;GET BYTE
+	ADDI 14,60
+	IDPB 14,2
+	AOBJN 1,RUNDA2
+	MOVEI 14,0
+	IDPB 14,2		;TERMINATE WITH ZERO
+	HRROI 1,10
+	SETZ 2,0
+	IDTIM
+	RET
+	MOVE 1,2
+	STAD
+	RET
+	SETZM CRSTAD		;SO IT WONT LOOK AT CRSTAD
+	RET
+>;end ifn imsss
+
+;COUNT BALANCE SET SIZE FOR ALL FORKS OF JOB NUM IN 1
+;RETURNS IN 2: COUNT OF FORKS IN LH, TOTAL BALANCE SET SIZE IN RH
+
+	INTERN .CNTSZ
+	EXTERN FKNR, FKPT,FKWSP,FKJOB
+
+.CNTSZ:	JSYS	MENTR
+	MOVSI	3, -NFKS	;SET AOBJN
+	SETZ	2,		;CLEAR COUNT
+
+FKCTLP:	HLRZ	4, FKJOB(3)	;GET JOB WHO OWNS FORK
+	SKIPL	FKPT(3)		;WAS FORK UNASSIGNED 
+	CAIE	4, (1)		;IS IT THE JOB REQUESTED
+	 JRST	WRNGJB		
+	ADD	2, [XWD 1, 0]	;ADD ONE TO NUMBER
+	HRRZ	4, FKNR(3)	 ;GET BALANCE SET SIZE
+	ADDI	2, (4)		;ADD THAT TO RH
+WRNGJB:	AOBJN	3, FKCTLP	;KEEP LOOKING	
+	UMOVEM	2, 2		;RETURN XWD FORKS, SIZE IN 2
+	JRST	MRETN
+IFN IMSSS,<
+INTERN .SYSLK
+
+.SYSLK:	JSYS	MENTR	;ROUTINE TO READ LOCATION IN MONITOR
+	LSH	1, -^D9		;GET PAGE TO LOOK AT
+	SKIPN	MMAP(1)		;IS IT IN MONITOR?
+	 JRST	MRETN		;LOZE
+	UMOVE	2, 1		;GET ADR AGAIN
+	MOVE	1, (2)		;GET CONTENTS OF LOC
+	UMOVEM	1, 1		;PUT IN AC 1	
+	AOS	(P)		;SET SKIP RETURN
+	JRST	MRETN
+
+;JSYS TO DO HALTF IF IN EXEC MODE- OTHERWISE DO LOGOUT
+
+INTERNAL .KLGOT
+
+.KLGOT:	JSYS MENTR
+	CAME 1,[-1]
+	JRST MRETN		;MUST BE -1
+	SKIPGE CTRLTT
+	JRST HALTF1		;NO TTY
+	MOVEI 1,100
+	RFMOD
+	TRNN 2,4
+	JRST HALTF1		;NOT STUDENT
+	MOVNI 1,1		;PUT -1 BACK IN
+	JRST LOG7		;DO LOGOUT
+
+
+;SPECILAL KIDDY LOGIN JSYS FOR OPER=127 AND KDRUN=24
+;SAME PARAMETERS AS FOR LOGIN
+INTERNAL KLGFL,.KLGIN
+EXTERN BYTIN,GROUPS,JOBDIR,JOBRT,MODES,SETACT,SKMRTN
+EXTERN I4LOGI
+
+KLGFL:	-1		;ALLOW KIDDY LOGIN JSYS
+
+.KLGIN: JSYS MENTR
+	MOVE A,JOBNO
+	MOVEI B,-1
+	SKIPN KLGFL		;JSYS ALLOWED
+	ERR(LGINX2)
+	TDNE B,JOBDIR(A)
+	ERR(LGINX5)
+	UMOVE A,1		;GET DIRECTORY
+	CAIE A,24
+	CAIN A,127
+	JRST .+2
+	ERR(LGINX2)
+	MOVE B,[XWD 040000,0 ]	;GROUP 3
+	MOVEM B,GROUPS
+	SETZM MODES
+	HLLOS CAPENB
+	UMOVE A,3
+	PUSHJ P,SETACT
+	ERR(LGINX1)		;SHOULD NEVER DO THIS
+	UMOVE A,1		;GET DIRECTORY
+	HRLI  A,23		;CONNECT TO KDLIB
+	HLRZM A,JOBDNO
+	MOVE B,JOBNO
+	MOVEM A,JOBDIR(B)
+	SETZM JOBRT(B)		;ZERO RUNTIME
+	TIME
+	MOVEM A,CONSTO
+	SETZM CAPENB
+;;;	JRST SKMRTN
+	JRST I4LOGI	;DO SPECIAL PRIORITY STUFF
+
+
+.PBTIN:	JSYS MENTR
+	SETOM TW3
+	MOVEI JFN,100
+	PUSHJ P,BYTIN
+	UMOVEM B,1
+	SETZM TW3
+	JRST MRETN
+>;END OF IMSSS
+
+
+END
+
+
+

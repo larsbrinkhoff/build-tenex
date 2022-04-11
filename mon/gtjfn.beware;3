@@ -1,0 +1,43 @@
+Following are several known problems associated with or discovered
+while making the SMXGTJ changes to GTJFN.
+
+1)  EXEC
+  a)  ? should be added to the EXEC break table to go to GTJFN when file
+	names are input so the ? feature in GTJFN is invoked (Hedberg
+	has the EXEC change reference).  Note that if ? is the first
+	input character to GTJFN, it will give an error break.
+
+  b)  INTERROGATE doesn't know about the extended wild cards yet for
+	searching archive directories.
+	
+  c)  The EXEC does GTJFN for DIR commands with the IGDLF flag (1B8) on
+	and sorts out deleted files from undeleted files later.  Thus,
+	even though a fix was made in GNJFN for scanning when recent
+	file versions are deleted, the DIR command still omits files
+	with deleted recent versions.  In the sequence
+
+		FOO.1;1
+		FOO.2;2 (deleted)
+		FOO.2;1
+		FOO.3;1
+
+	the DIR FOO.*;0 command to list all most recent versions will
+	omit FOO.2 entirely.
+
+  d)  ^V is eaten by the EXEC when passing an input string down to
+	GTJFN (any string consumer).  For example if a file TTY:.;1
+	is created by some DEC program, one would think this should
+	be deleted by DEL TTY^V:.;1 but the EXEC eats the ^V and
+	doesn't pass it with the file name string.  One has to type
+	2 ^V's to get the desired result.  This is a long standing
+	bug and has nothing to do with GTJFN.
+
+2)  BSYS
+
+  a)  In the long GTJFN tables at RSTTBL: and DMPTBL:, string pointers
+	for DMPDEV and DMPDIR are in the form  0,,ADR  rather than
+	legitimate TENEX string pointers.  GTJFN now checks for valid
+	string pointers and these forms must be changed to  -1,,ADR.
+
+  b)  BSYS doesn't know about extended wild cards yet in specifying
+	files for retrieval, etc.

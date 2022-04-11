@@ -1,0 +1,85 @@
+;<MON>NIL.MAC;1		15-MAR-77 17:20		EDIT BY RINDFLEISCH
+;  Fix so NIL: cannot have wild card name or extension
+
+	SEARCH	FILEDEF
+	TITLE	NIL
+	USE	SWAPPC
+
+EXTERN	CPOPJ,SKPRET,SK2RET
+
+; Null device
+
+NILDTB::NILSET
+IFE SMXGTJ,<
+	SK2RET
+	SK2RET
+	SKPRET
+	>
+IFN SMXGTJ,<
+	NILNAM
+	NILEXT
+	NILVER
+	>
+	CPOPJ
+	CPOPJ
+	CPOPJ
+	NILOPN
+	NILSQI
+	NILSQO
+	SKPRET
+	CPOPJ
+	CPOPJ
+	CPOPJ
+	CPOPJ
+	CPOPJ
+	CPOPJ
+	CPOPJ
+	CPOPJ
+	CPOPJ		; Device status read
+	CPOPJ		; Device status set
+
+NILOPN:	CAIE JFN,377777
+	AOS (P)
+NILSQI:
+NILSQO:	SETZB A,B
+	CAIN JFN,377777
+	 POPJ P,
+	SETZM FILBYT(JFN)
+	HRLOI A,377777
+	MOVEM A,FILCNT(JFN)
+	SETZB A,B
+	POPJ P,
+
+IFE SMXGTJ,<
+NILSET:	NOINT
+	TEST(O,NNAMF,NVERF)
+	JRST SK2RET
+	>
+
+IFN SMXGTJ,<
+NILSET:	TEST(O,NNAMF,NVERF)
+	TEST(NE,DIRSF)		; If dir wild card
+	 POPJ P,		; Error return
+	NOINT			; Else, success and NOINT
+	JRST SK2RET
+
+NILNAM:
+NILEXT:	TEST(NE,NAMSF,EXTSF)	; If a wild card is specified
+	 JRST NILERR		; Return +1 with an error
+	TEST(NE,UNLKF)		; Otherwise return +2 with right lock
+	 JRST SK2RET		; Stayed locked
+	OKINT			; Return unlocked
+	JRST SK2RET
+
+NILERR:	OKINT			; Bad news, turn on interrupts
+	POPJ P,			; And return +1
+
+NILVER:	TEST(NE,UNLKF)		; Version OK (*'s disallowed in GTJFN),
+				; Leave locked?
+	 JRST SKPRET		; Yes
+	OKINT			; No
+	JRST SKPRET
+	>
+
+	END
+

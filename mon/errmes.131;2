@@ -1,0 +1,484 @@
+;<MON>ERRMES.131	2/28/75			EDIT BY RINDFLEISCH
+; Added 134 error mnemonics for GTJFN: GJFX34 - 38
+;				GNJFN: GNJFX2
+; and mnemonics for SMXGTJ additions to GTJFN: GJFX40-41
+;<MON>ERRMES.MAC	7/75			EDIT BY HEATHMAN
+;ADDED TYMNET ERROR MESSAGES
+;<SOURCES>ERRMES.MAC;1    17-NOV-72  0:12:53	EDIT BY CLEMENTS
+;<SOURCES>ERRMES.FAI;12    29-JUN-72  9:47:51	EDIT BY TOMLINSON
+
+TITLE ERRMES - SYSTEM ERROR MESSAGES
+SUBTTL J R BARNABY  28 DEC 70
+; EDITTED BY RST  16 JUNE 71 1130:
+
+;assemble with STENEX.MAC.
+
+; THE FOLLOWING SHORT PROGRAM IS USED TO STORE THE ERROR MNEMONIC
+; INFORMATION ON THE DISC
+
+START:	MOVSI 1,400001
+	HRROI 2,[ASCIZ /ERROR.MNEMONICS/]
+	GTJFN
+	0
+	MOVE 2,[XWD 440000,100000]
+	OPENF
+	0
+	MOVNI 3,ESTRINGS-ERRTAB
+	MOVE 2,[POINT 36,ERRTAB]
+	SOUT
+	CLOSF
+	JFCL
+	HALTF
+
+LIT
+
+DEFINE X(N,S)<	QQ==<.-ERRTAB>*5
+YY==<N>&37777
+RELOC NAMTAB+YY
+SIXBIT /N/
+RELOC
+RELOC ERRTAB+YY
+QQ
+RELOC
+ASCII \S'@\
+>
+
+NAMTAB:	
+	XLIST
+	REPEAT 10000,<0>
+	LIST
+ERRTAB:	
+	XLIST
+	REPEAT 10000,<0>
+	LIST
+
+
+STRINGS:
+
+;ERROR MESSAGE TEXTS
+;(ERROR NUMBER SYMBOLS DEFINED IN STENEX.MAC.)
+
+X(LGINX1,LOGIN: Illeg account)
+X(LGINX2,LOGIN: Can't Log in under that directory number)
+X(LGINX3,LOGIN: NO ROOM in System)
+X(LGINX4,LOGIN: Password incorrect)
+X(LGINX5,LOGIN: Already Logged in)
+
+X(CRJBX1,CRJOB: Cannot open Pri In file)
+X(CRJBX2,CRJOB: Cannot open Pri Out file)
+X(CRJBX3,CRJOB: Illeg account)
+X(CRJBX4,CRJOB: Terminal not available)
+X(CRJBX5,CRJOB: Illeg directory #)
+X(CRJBX6,CRJOB: NO ROOM in system)
+X(CRJBX7,CRJOB: Password incorrect)
+
+X(LOUTX1,Illegal attempt to LGOUT job)
+X(LOUTX2,LGOUT: No such job)
+
+X(CACTX1,CACCT: Illegal account)
+X(CACTX2,CACCT: Not logged in)
+
+X(EFCTX1,EFACT: LOG Spec Cap not enabled)
+X(EFCTX2,EFACT: Entry longer than 64 words)
+X(EFCTX3,<EFACT: Accounting system failure,
+ Contact Operator or Systems Personell>)
+
+
+X(GJFX1,GTJFN: Desired "JFN" illeg)
+X(GJFX2,GTJFN: Desired JFN not available)
+X(GJFX3,GTJFN: No JFN's available)
+X(GJFX4,GTJFN: Illeg char)
+X(GJFX5,GTJFN: More than 39 chars in a field)
+X(GJFX6,GTJFN: Two device fields or device not first)
+X(GJFX7,GTJFN: Two directory fields or directory after name)
+X(GJFX8,GTJFN: "<"not following ">")
+X(GJFX9,GTJFN: More than 1 name field)
+X(GJFX10,GTJFN: Non-numeric version)
+X(GJFX11,GTJFN: Two version fields)
+X(GJFX12,GTJFN: Two accounts)
+X(GJFX13,GTJFN: Two protections)
+X(GJFX14,GTJFN: Bad protection)
+X(GJFX15,GTJFN: Illeg confirmation char)
+X(GJFX16,GTJFN: No such device)
+X(GJFX17,GTJFN: No such directory)
+X(GJFX18,GTJFN: No such file name)
+X(GJFX19,GTJFN: No such extension)
+X(GJFX20,GTJFN: No such version)
+X(GJFX21,<GTJFN: No such file (it disappeared)>)
+X(GJFX22,GTJFN: JSB full)
+X(GJFX23,GTJFN: Directory full)
+X(GJFX24,GTJFN: Old file required)
+X(GJFX25,GTJFN: Name given for non-directory device)
+X(GJFX26,GTJFN: Extension for non-directory device)
+X(GJFX27,GTJFN: New file required)
+X(GJFX28,GTJFN: Device not mounted)
+X(GJFX29,GTJFN: Device not available)
+X(GJFX30,GTJFN: Numeric account required)
+X(GJFX31,GTJFN: Illeg "*")
+X(GJFX32,GTJFN: Empty directory and "*" given for name)
+X(GJFX33,GTJFN: NULL NAME NOT ALLOWED)
+X(GJFX34,GTJFN: ? was typed)
+X(GJFX35,GTJFN: Access to directory not allowed)
+X(GJFX36,GTJFN: Directory has bad format - notify operator)
+X(GJFX37,GTJFN: Illegal version number)
+X(GJFX38,GTJFN: Illegal account)
+X(GJFX40,GTJFN: Input deleted)
+X(GJFX41,GTJFN: Retype buffer full)
+
+X(GNJFX2,GNJFN: No more files)
+
+X(OPNX1,OPENF or RNAMF: file open)
+X(OPNX2,OPENF: File doesn't exist)
+X(OPNX3,OPENF: Read access not allowed)
+X(OPNX4,OPENF: Write access not allowed)
+X(OPNX5,OPENF: Execute access not allowed)
+X(OPNX6,OPENF: Append access not allowed)
+X(OPNX7,OPENF: Device assigned to another job)
+X(OPNX8,OPENF: Device not mounted)
+X(OPNX9,OPENF: File busy)
+X(OPNX10,OPENF: NO ROOM)
+X(OPNX11,OPENF: WHEEL or OPER spec cap needed to not change dates)
+X(OPNX12,OPENF: List access not allowed)
+X(OPNX13,OPENF: Illeg access)
+X(OPNX14,OPENF: Illeg mode)
+X(OPNX15,OPENF: Non read/write access not allowed)
+X(OPNX16,OPENF: File has bad index block)
+X(OPNX17,OPENF: NO ROOM FOR LONG FILE PAGE TABLE TABLE)
+X(OPNX18,OPENF: NO ROOM TO INITIALIZE INDEX BLOCK)
+X(OPNX19,OPENF: IMP IS NOT UP)
+X(OPNX20,OPENF: HOST IS NOT UP)
+X(OPNX21,OPENF: CONNECTION REFUSED)
+X(OPNX22,OPENF: CONNECTION BYTE SIZE MISMATCH)
+
+
+X(DESX1,Illeg TENEX source/destination designator)
+X(DESX2,That terminal not available)
+X(DESX3,Unassigned JFN)
+X(DESX4,Illeg use of terminal designator or string pointer)
+X(DESX5,File not open)
+X(DESX6,File must be A TTY)
+X(DESX7,JFN MUST NOT REFER TO OUTPUT ASTERISKS)
+X(DESX8,FILE MUST BE ON DISK)
+
+X(CLSX1,CLOSF: File not open)
+X(CLSX2,CLOSF: File not closable by this fork)
+
+X(RJFNX1,RLJFN: File is open)
+X(RJFNX2,RLJFN: JFN being used to accumulate file name)
+X(RJFNX3,RLJFN: JFN not accessible to this fork)
+
+X(DELFX1,DELF: You don't have delete access to file)
+
+X(SFPTX1,SFPTR: File not open)
+X(SFPTX2,SFPTR: illeg to set this file's pointer)
+X (SFPTX3,<SFPTR: illeg pointer (eg less than -1)>)
+
+X(CNDIX1,<CNDIR (used for password check only): Incorrect password>)
+X(CNDIX2,CNDIR: Incorrect password)
+X(CNDIX3,CNDIR: Invalid directory #)
+X(CNDIX4,CNDIR: Can't check password when logged in)
+X(CNDIX5,CNDIR: Not logged in)
+
+X(SFBSX1,SFBSZ: Can't change byte size for this opening of file)
+X(SFBSX2,OPENF or SFBSZ: Illeg byte size)
+
+X(IOX1,Reading from a file not open for reading)
+X(IOX2,Writing on a file not open for writing)
+X(IOX3,RIN or ROUT: Can't change pointer for this opening of file)
+X(IOX4,Reading beyond end of file)
+X(IOX5,Data error)
+
+X(PMAPX1,PMAP: Illeg access request)
+X(PMAPX2,PMAP: Illeg case)
+
+X(SPACX1,SPACS: Illeg access request)
+
+X(FRKHX1,Illeg fork handle)
+X(FRKHX2,Attempt to manipulate a superior fork)
+X(FRKHX3,Illeg attempt to manipulate multiple forks)
+X(FRKHX4,Fork running)
+X(FRKHX5,<HFORK: Fork(s) already halted>)
+X(FRKHX6,CFORK: Fork handles used up)
+
+X(GTABX1,GETAB: Illeg table #)
+X(GTABX2,GETAB: Illeg table index)
+
+X(RUNTX1,RUNTM: Fork handle -3 or -4 given)
+
+X(STADX1,STAD: Date & time already set and not WHEEL or OPER)
+X(STADX2,STAD: Ridiculous date or time)
+
+X(ASNDX1,ASND: Unassignable device)
+X(ASNDX2,ASND: Illeg to assign this device)
+X(ASNDX3,ASND or CSYNO: No such device)
+
+X(CSYNX1,CSYNO: Synonym already in use)
+
+X(ATACX1,ATACH: Illeg job #)
+X(ATACX2,ATACH: Job already attached)
+X(ATACX3,ATACH: Directory # does not match)
+X(ATACX4,ATACH: Password Incorrect)
+X(ATACX5,ATACH: No controlling terminal)
+
+X(DCHRX1,DVCHR: Illeg device designator)
+
+X(STDVX1,STDEV: No such device)
+
+X(DEVX1,Illeg device designator)
+X(DEVX2,Device assigned to another job)
+X(DEVX3,Device not mounted)
+
+X(MNTX1,MOUNT: Bad directory)
+;THERE IS NO MNTX2
+X(MNTX3,MOUNT: Unmountable device)
+
+X(TERMX1,ATI or DTI: That code not useable for PSI's)
+
+X(ATIX1,ATI: Illeg channel #)
+X(ATIX2,ATI: Spec cap required to assign ^C)
+
+X(DTIX1,DTI: That code wasn't assigned to you) 
+
+X(TTYX1,STI: Not a terminal or no such terminal)
+
+X(CFRKX2,CFORK: Can't start fork with no pages)
+X(CFRKX3,CFORK: NO ROOM in System)
+
+X(KFRKX1,KFORK: Can't kill top level fork)
+X(KFRKX2,KFORK: Can't kill self)
+
+X(RFRKX1,<RFORK: Attempt to resume non-frozen fork(s)>)
+
+X(GFRKX1,GFRKS: Illeg fork handle in 2)
+
+X(GETX1,GET: Bad save file format)
+X(GETX2,GET: System's Special Pages Table full)
+
+X(SFRVX1,SFRKV: Illeg ent vect relative position)
+
+X(NOUTX1,NOUT: Radix out of range 2 to 10)
+X(NOUTX2,NOUT: Column overflow)
+
+X(IFIXX1,NIN: Radix out of range 2 to 10)
+X(IFIXX2,NIN: First character not a digit)
+X(IFIXX3,NIN: Overflow)
+
+X(GFDBX1,GTFDB: Illeg displacement)
+X(GFDBX2,GTFDB: Illeg number of words)
+X(GFDBX3,GTFDB: You don't have list access to file)
+
+X(CFDBX1,CHFDB: Illeg displacement)
+X(CFDBX2,CHFDB: Illeg to change those bits)
+X(CFDBX3,CHFDB: You don't have spec cap or file access to change those bits)
+X(CFDBX4,CHFDB: Illeg value for those bits)
+
+X(DUMPX1,DUMPI/O: Command list error)
+X(DUMPX2,DUMPI/O: JFN wasn't opened in mode 17)
+X(DUMPX3,DUMPI/O: Address too big or crosses end of memory)
+X(DUMPX4,DUMPI/O: Memory access error)
+
+X(RNAMX1,RNAMF: Files not on same device)
+X(RNAMX2,RNAMF: DESTINATION FILE DISAPPEARED)
+X(RNAMX3,RNAMF: ACCESS TO DESTINATION NOT ALLOWED)
+X(RNAMX4,RNAMF: NO ROOM)
+X(RNAMX5,RNAMF: DESTINATION BUSY)
+X(RNAMX6,RNAMF: DESTINATION HAS BAD PAGE TABLE)
+X(RNAMX7,RNAMF: SOURCE DISAPPEARED)
+X(RNAMX8,RNAMF: ACCESS TO SOURCE NOT ALLOWED)
+X(RNAMX9,RNAMF: SOURCE IS EMPTY)
+X(RNMX10,RNAMF: SOURCE BUSY)
+X(RNMX11,RNAMF: SOURCE HAS BAD PAGE TABLE)
+X(RNMX12,RNAMF: RENAME TO SELF)
+
+X(BKJFX1,Can't BKJFN that device twice)
+
+X(TIMEX1,Time greater than 24 hours)
+X(ZONEX1,Time zone out of range -12 to 12)
+X(ODTNX1,ODTIM can't print time zones except USA and Greenwich)
+X(DILFX1,Illegal date format)
+X(TILFX1,Illegal time format)
+X(DATEX1,Year out of range 1858 to 2576)
+X(DATEX2,Month greater than 11)
+X(DATEX3,Day of month too large)
+X(DATEX4,Day of week greater than 6)
+X(DATEX5,Date out of legal range)
+X(DATEX6,System date and time not set)
+
+X(SMONX1,SMON: LOG spec cap not enabled)
+
+X(CPRTX1,CPRTF: You don't have access to file to change protection)
+
+X(SACTX1,SACTF: File not on multiple-directory device)
+X(SACTX2,SACTF: JSB full)
+X(SACTX3,SACTF: Directory requires numeric account)
+X(SACTX4,SACTF: You don't have access to file to change account)
+
+X(GACTX1,GACTF: File not on multiple-directory device)
+X(GACTX2,GACTF: File doesn't exist)
+
+X(FFUFX1,FFUFP: File not open)
+X(FFUFX2,FFUFP: File not on multiple-directory device)
+X(FFUFX3,FFUFP: No used page found)
+
+X(DSMX1,<DSMNT: Can't dismount -- file(s) open>)
+
+X(RDDIX1,RDDIR failure)
+
+X(SIRX1,SIR: table address less than 20)
+
+X(SSAVX1,SSAVE: File not on disk)
+X(SSAVX2,SSAVE: Page count greater than 1000)
+
+X(SEVEX1,SEVEC: Entry vector longer than 777)
+
+X(WHELX1,WHEEL or OPERATOR special capability not enabled)
+
+X(CRDIX1,CRDIR: WHEEL or OPER spec cap not enabled)
+X(CRDIX2,CRDIR: Wrong directory # for name)
+X(CRDIX3,CRDIR: JSB full)
+X(CRDIX4,CRDIR: Sub-index full)
+X(CRDIX5,CRDIR: Null name illeg)
+X(CRDIX6,CRDIR: Can't change # of old directory)
+X(CRDIX7,CRDIR: CAN'T KILL DIRECTORY WITH BUSY FILES)
+
+X(GTDIX1,GTDIR: WHEEL or OPER spec cap not enabled)
+X(GTDIX2,GTDIR: No such directory #)
+
+X(FLINX1,FLIN: First char not blank or numeric)
+X(FLINX2,FLIN: Number too small)
+X(FLINX3,FLIN: Number too large)
+X(FLINX4,FLIN: Bad format)
+
+X(FLOTX1,FLOUT: Field overflow before or after point)
+X(FLOTX2,FLOUT: Exponent field overflow)
+X(FLOTX3,FLOUT: Illeg format spec)
+
+X(FDFRX1,FDFRE: Not a multiple directory device)
+X(FDFRX2,FDFRE: No such directory #)
+
+X(ATPX1,ATPTY: Bad rec'v JFN)
+X(ATPX2,ATPTY: Rec'v JFN not read)
+X(ATPX3,ATPTY: Rec'v JFN not open)
+X(ATPX4,ATPTY: Rec'v JFN not net)
+X(ATPX5,ATPTY: Rec'v JFN not unused)
+X(ATPX6,ATPTY: Rec'v connection refused)
+X(ATPX7,ATPTY: Send JFN Bad)
+X(ATPX8,ATPTY: Send JFN not write)
+X(ATPX9,ATPTY: Send JFN not open)
+X(ATPX10,ATPTY: Send JFN not net)
+X(ATPX11,ATPTY: Send JFN not unused)
+X(ATPX12,ATPTY: Send connection refused)
+X(ATPX13, ATPTY: No NVT's)
+
+X(CVSKX1,CVSKT: Bad JFN)
+X(CVSKX2,CVSKT: Local socket illegal in this context)
+
+X(DPX1,DISPLAY JSYS: UNASSIGNED DISPLAY PROCESS)
+X(DPX2,DISPLAY JSYS: ILLEGAL DISPLAY PROCESS NUMBER)
+
+X(STRDX1,<STRDP (STSDP): ILLEGAL MAP WORD>)
+X(STRDX2,<STRDP (STSDP): TOO MANY PAGES LOCKED>)
+X(STRDX3,<STRDP (STSDP): NON-READABLE-WRITABLE-EXECUTABLE PAGE>)
+X(STTX1,<STTYP: Illegal terminal type number>)
+IFDEF TYMSW,<			;!! MAH @ SUMEX !! 7/75
+;	TYMNET ERROR DEFINITIONS
+X(TYMXX1,<TYMNET AUXBLD circuit builder busy, try again later.>)
+X(TYMXX2,<TYMNET Supervisor error response, you lose!>)
+X(TYMXX3,<TYMNET Supervisor failed to respond>)
+X(TYMXX5,<You outa luck, no free TENEX lines for TYMNET to use>)
+X(TYMXX6,<Bad ball code to TYMOP>)
+X(TYMXX7,<Illegal TYMOP code - what the hell do you want me to do anyway?>)
+X(TYMXX8,<Hey! I was expecting a TYMNET tty line>)
+X(TYMXX9,<WoW! Wierd! TYMNET AUXBLD got a line,
+but was zapped before initialization>)
+> ; END IFDEF TYMSW
+REPEAT 0,<
+;	   ILLIAC 4 ERROR DEFINITIONS
+;
+X(MMPX1,<MMP DATA TRANSMISSION PROTOCOL ERROR>)
+X(MMPX2,<MMP MODE ERROR>)
+X(MMPX3,<MMP AREA HANDLE TABLE FULL>)
+X(MMPX4,<MMP RECEIVED INVALID AREA HANDLE>)
+X(MMPX5,<MMP I4 DISK AREA EXCEEDED>)
+X(MMPX6,<MMP ENCOUNTERED INVALID I4 DISK DIR ENTRY>)
+X(MMPX7,<MMP ARRAY CMMAND-RESULT PROTOCOL ERROR>)
+X(MMPX10,<MMP INVALID VAR FIELD SPECIFICATION>)
+X(MMPX11,<MMP NONEXISTANT I4 DISK AREA>)
+X(MMPX12,<MMP I4 DISK DIR PROTOCOL VIOLATION>)
+X(MMPX13,<MMP CU INTRPTS PREVENT RUNNING OF SCHEDULER>)
+X(MMX1,<MMPMON NO PAGES AVAILABLE FOR LOCKING-64 MAX>)
+X(MMX2,<MMPMON ILLEGAL OPCODE RECEIVED>)
+X(MMX3,<MMPMON ERROR IN COMMAND>)
+X(MMX4,<MMPMON NO ROOM FOR NEW OPEN FILES-64 MAX>)
+X(MMX5,<MMPMON I/O DATA ERROR>)
+X(MMX6,<MMPMON JSYS ERROR DURING COMMAND PROCESSING>)
+> ;END REPEAT 0
+
+X(ILINS1,Illegal instruction executed)
+X(ILINS2,Unassigned JSYS executed)
+X(ILINS3,10/50 UUO executed and compatability file not found)
+
+ESTRINGS:
+
+;ROUTINE TO PRINT OUT MESSAGES, FOR TEST PURPOSES.
+;ENTER WITH DDT AFTER RUNNING PROGRAM AT "START" ABOVE.
+
+TEST:	RESET
+	HRROI 1,[ASCIZ /
+OUTPUT FILE: /]
+	PSOUT
+	MOVSI 1,460003
+	MOVE 2,[XWD 100,101]
+	GTJFN
+	  JRST TEST
+	MOVE 2,[XWD 70000,100000]
+	OPENF
+	  JRST TEST
+	MOVE 16,1		;SAVE JFN
+	SETZ 3,
+	MOVE 5,[XWD -7777,600000]
+	MOVEI 2,37
+	BOUT
+LOOP:	MOVEI 1,(16)
+	MOVE 2,5
+	ANDI 2,7777
+	SKIPN 10,NAMTAB(2)
+	JRST BOT
+	MOVEI 11,0
+	ROTC 10,6
+	MOVEI 2,40(11)
+	BOUT
+	JUMPN 10,.-4
+	MOVEI 2,11
+	BOUT
+	MOVEI 3,10
+	HRRZ 2,5
+	NOUT
+	  JFCL
+	MOVE 1,16
+	MOVEI 2,11
+	BOUT			;TAB
+	MOVE 2,5
+	ANDI 2,7777
+	MOVE 2,ERRTAB(2)
+	IDIVI 2,5
+	SUBI 2,10000
+	MOVEI 10,STRINGS(2)
+	HRLI 10,440700
+LLL:	ILDB 2,10
+	CAIN 2,100
+	JRST EOL
+	BOUT
+	JRST LLL
+EOL:	MOVEI 2,15
+	BOUT
+	MOVEI 2,12
+	BOUT
+BOT:	AOBJN 5,LOOP
+	CLOSF
+	JFCL
+	HALTF
+
+
+	END START
+

@@ -1,0 +1,376 @@
+	TITLE	SCP611
+	SUBTTL	JIM LIEB, SUMEX PROJECT, STANFORD MED. SEPT 75
+
+; Device routines for Techtronix 611 and PDP-11 display system.
+
+	SEARCH STENEX,PROLOG,FILEDEF
+
+IFDEF SCPN, <	;Include this module if greyscope defined
+
+; Definitions and linkage
+
+INTERN SCPDSP,SCPSV,SCPCHK,SCPINI,SCPRST
+
+EXTERN CPOPJ,EDISMS,SCPTIM,UNLCKF,TODCLK,SCPTIM
+
+; Device bit definitions and PI assignment
+
+SC11==14			; Device address of interface
+SCPI==6				; PI level (down there with the DC-10)
+
+; Cono bit definitions
+
+INT11==1B32			; Cono bit to interrupt 11 on INTA1
+CLR19==1B31			; Cono bit to clear INT10
+
+; The rest of these bits are copied to RH of SCPSTS to keep cono consistant
+
+TEBLK==1B30			; End of data block
+				; Clears and inhibits DOUT
+TNBLK==1B29			; Request to send
+RRRDY==1B28			; Ready to receive
+RSRT11==1B27			; Restart 11 program (set by MTOPR)
+BOOT11==1B26			; Go to program loader (set by MTOPR)
+COMRST==1B25			; Reset comm monitor and interface to idle
+C11MSK==177B24			; Mask for SDSTS bits
+
+; Coni definitions
+
+REBLK==1B28			; End of data block
+RNBLK==1B27			; Request to send
+TRRDY==1B26			; Ready to receive
+DIN==1B21			; Data in -- causes interrupt, clrd by DATAI
+DOUT==1B20			; Data out -- causes interrupt, clrd by DATAO
+				; Also cleared and inhibited by cono 1B30
+INT10==1B19			; Interrupt by 11, cleared by cono CLR19
+ACK11==1B25			; Acknowledged MTOPR bit from 11
+
+; REBLK, RNBLK, TRRDY have same meaning for coni as TEBLK, TNBLK, RRRDY
+; They are mapped from 11 status register differently is all (enough!)
+
+; Bits in LH of SCPSTS
+; Used for local control of link. not cono'ed or returned to user
+
+TMIERR==400000		; Input transfer timed out (assume hung)
+TMOERR==200000		; Output transfer timed out (assume hung here too)
+OACTIV==100000		; We are currently sending something to 11
+IACTIV==040000		; We are currently receiving something from 11
+IOVFLO==020000		; Input buffer overflowed, treat as data error
+FULL  ==010000		; 1= buffer full (set by PI, clrd by process) 
+OPRCMP==004000		; Reflects ACK11 where scheduler can find it
+OPRHNG==002000		; MTOPR ack late (assume 11 crashed, hung)
+
+; Timer values for IO and MTOPR hang checking
+
+OPRHTM==^D500		; Time for mtopr to come back with acknowledgement
+INPHTM==^D1000		; Time limit to move data block from 11
+OUTHTM==^D1000		; Time limit to move data block to 11
+DEFTIM==^D2000		; Come back at least at this time
+
+; Device dispatch table
+	USE SWAPPC
+
+SCPDSP:	CPOPJ			; Directory setup
+	CPOPJ			; Name lookup
+	CPOPJ			; Extension lookup
+	CPOPJ			; Version lookup
+	CPOPJ			; Protection insertion
+	CPOPJ			; Account insertion
+	CPOPJ			; Status insertion
+	SCPOPN			; Open device
+	CPOPJ			; Sequential input
+	CPOPJ			; Sequential output
+	SCPCLZ			; Close device
+	CPOPJ			; Rename file
+	CPOPJ			; Delete file
+	SCPDPI			; Dump mode input
+	SCPDPO			; Dump mode output
+	CPOPJ			; Mount device
+	CPOPJ			; Dismount device
+	CPOPJ			; Init device directory
+	SCPOPR			; Do mtopr function
+	SCPGST			; Get device status
+	SCPSST			; Set device status
+; Private storage
+
+LS SCPSVX,1			; Return store for PI side
+LS SCPSTS,1			; Interface status bits (reflects the CONO)
+LS SCPIPT,1			; Input buffer pointer for PI
+LS SCPOPT,1			; Output buffer pointer for PI
+LS SCPITM,1			; Input timeout word
+LS SCPOTM,1			; Output timeout word
+LS SCPMTM,1			; MTOPR timeout word
+
+; Initialization
+	USE RESPC
+SCPINI:
+	RET
+
+; Reset and restart
+
+SCPRST:
+	RET
+; Interrupt service entry and clock routines
+
+SCPSV:	XWD SCPSVX,.+1
+	CONSO	SC11,INT10+DIN+DOUT	; Anything at all from 11?
+	JRST @SCPSVX			; No, return
+	CONSO	SC11,DIN		; There is something, an input?
+	JRST SCPIN			; Yes
+	CONSO	SC11,DOUT		; An output?
+	JRST SCPOUT			; Yes
+	CONSO	SC11,INT10		; Well then a control interrupt
+	JRST SCPCTR			; Yes
+	BUG(NTE,<SCPSV: INTERRUPT BIT FROM PDP11 DISAPPEARED>) ;???
+	JRST @SCPSVX			; Well no sense letting him hurt us
+
+; Sched level 8 clock routine
+
+SCPCHK:
+	RET
+
+	USE SWAPPC
+; Open device
+
+SCPOPN:	
+	RET
+; Close device
+
+SCPCLZ:	
+	RET
+; Dump input
+; Call:	1/ iowd of users buffer
+;	PUSHJ P,SCPDPI
+; Returns with ERRF set if timed out or buffer overflow,
+; returns -number of words transferred to iowd loc
+
+SCPDPI:	MOVEM	1,SCPIPT		; Save to IOWD
+	MOVSI	1,FULL+TMIERR+IACTIV+IOVFLO
+	ANDCAM	1,SCPSTS		; Reset these bits before next xfer
+	MOVE	2,TODCLK		; Get current clock
+	MOVEI	1,INPHTM		; And timeout interval
+	ADDI	2,(1)			; When TODCLK = this we lose
+	MOVEM	2,SCPITM		; Save it for the clock routine
+	CAMG	1,SCPTIM		; Move this time to the clock
+	MOVEM	1,SCPTIM		; Routine time if it is sooner
+	MOVSI	1,IACTIV		; Mark input as ready
+	IORM	1,SCPSTS		; Update status
+	PIOFF 				; Keep things from moving around
+	CONSZ	SC11,RNBLK		; Does 11 have something?
+	JSP	4,INPINI		; Yes, get it else let PI side do it
+	PION				; Let it go again
+	MOVE	1,[XWD FULL,SCPDLS]
+	JSYS	EDISMS			; Disms until FULL comes up
+	MOVSI	1,IACTIV
+	ANDCAM	1,SCPSTS		; Say input no longer active
+	MOVSI	1,TMIERR+IOVFLO
+	TDNE	1,SCPSTS		; Did it time out or overflow
+	TEST (O,ERRF)			; Yes mark as error
+	UMOVE	2,2			; Get command pointer
+	UMOVE	1,(2)			; Now command
+	HLRE	1,1			; Just the count
+	MOVN	1,1			; Make it positive
+	HLRE	3,SCPIPT		; Get the count from the transfer
+	SUB	1,3			; 1 now has pos count of xfered words
+	HRL	1,1			; Put it in both halves
+	XCTUU [	ADDM	1,(2)]		; So we can modify users IOWD
+	SETZM	SCPIPT			; Insures spurious inputs don't kill
+	RET
+
+; Initiate an input transfer. called from both process and PI
+
+INPINI:	MOVEI	1,RRRDY			; Need a bit
+	TDNE	1,SCPSTS		; Is it already set?
+	JRST (4)			; Yes, go away
+	IORB	1,SCPSTS		; Update status
+	CONO	SC11,SCPI+INT11(1)	; And poke the 11
+	JRST (4)
+
+; Dump output
+; Call:	1/ iowd of users buffer
+;	PUSHJ P,SCPDPO
+; Returns with ERRF set if timed out
+
+SCPDPO:	ADD	1,[1,,0]		; Fake up pointer to overflow early
+	MOVEM	1,SCPOPT		; Store away the pointer
+	MOVE	2,TODCLK		; Get current clock
+	MOVEI	1,OUTHTM		; And timeout interval
+	ADDI	2,(1)			; When TODCLK = this we lose
+	MOVEM	2,SCPOTM		; Save it for the clock routine
+	CAMG	1,SCPTIM		; Move this time to the clock
+	MOVEM	1,SCPTIM		; Routine time if it is sooner
+	MOVE	1,[TMOERR,,TEBLK]
+	AMDCAM	1,SCPSTS		; Clear error an EBLK bits
+	MOVE	1,[OACTIV,,TNBLK]
+	IORB	1,SCPSTS		; Mark output as busy and NBLK
+	CONO	SC11,SCPI+INT11(1)	; Tell the 11 about it
+	MOVE	1,[XWD TEBLK,SCPDRS]
+	JSYS	EDISMS			; Disms until EBLK comes up
+	MOVSI	1,OACTIV
+	ANDCAB	1,SCPSTS		; Clear the active bit
+	TLNE	1,TMOERR		; Did it time out?
+	TEST (O,ERRF)			; Yes, mark a data error
+	RET
+; Test routines to wait for buffer empty on output and
+; Completed transmission on input
+	USE RESPC
+
+SCPDRS:	TRNA			; Skip cause we want to look at RH
+SCPDLS:	MOVSI	1,(1)		; Input wants the LH
+	TDNN	1,SCPSTS	; Has the bit come up?
+	JRST 0(4)		; No, continue waiting
+	JRST 1(4)		; Yes, resume the blocked process
+
+	USE SWAPPC
+
+; Mtopr the device
+
+SCPOPR:	CAIG	2,3			; Anything other than 2
+	CAIGE	2,1			; Or 1
+	RET				; Is a nop
+	PUSHJ	P,SCPOPX		; Poke the 11
+	TRNA				; You lose
+	RET				; Successful
+	PUSHJ	P,UNLCKF		; Don't forget to unlock the file!
+	MOVEI	1,IOX5			; Data error is better than nothing
+	MOVEM	1,LSTERR		; Save it so he can get it
+	JRST ITRAP			; And do a PSI illegal instruction
+
+; This is called as a routine to allow a call from SCPOPN code
+
+SCPOPX:	MOVEI	1,OPRMSK
+	ANDCAM	1,SCPSTS		; Clear the old bits
+	MOVEI	1,OPRMSK(2)
+	IORB	1,SCPSTS		; Copy the current bits
+	CONO	SC11,SCPI+INT11(1)	; And interrupt the 11
+	MOVE	2,TODCLK		; Get current clock
+	MOVEI	1,OPRHTM		; And timeout interval
+	ADDI	2,(1)			; When TODCLK = this we lose
+	MOVEM	2,SCPMTM		; Save it for the clock routine
+	CAMG	1,SCPTIM		; Move this time to the clock
+	MOVEM	1,SCPTIM		; Routine time if it is sooner
+	MOVE	1,[XWD OPRCMP,SCPDLS]
+	JSYS EDISMS			; Wait till it gets acknowledged
+	MOVSI	1,OPRHNG
+	TDNN	1,SCPSTS		; Did the 11 time out?
+	JRST SCPOP1			; No
+	TLO	1,OPRCMP		; We want this bit too
+	ANDCAM	1,SCPSTS		; So we can kill both of them
+	RET				; Fail return
+
+SCPOP1:	MOVSI	1,OPRCMP		; Success return, do skip
+	ANDCAM	1,SCPSTS		; Now clr the ack bit
+	AOS	(P)
+	RET
+
+; Mtopr code table
+
+OPRMSK:	COMRST+RSRT11+BOOT11		; A mask of all the bits for clearing
+	RSRT11				; (1)	Restart 11 program
+	BOOT11				; (2)	Boot 11 program
+	COMRST				; (3)	Reset comm monitor and hrdwr
+; Get device status
+
+SCPGST:	CONI	SC11,1			; Get the interface bits
+	ANDI	1,37750			; Give him only his bits
+	HLL	1,SCPSTS		; Put in our bits
+	UMOVEM	1,2			; Put it in his dev dep reg
+	RET
+
+; Set device status
+
+SCPSST:	UMOVE	1,2			; Get his bits
+	ANDI	1,C11MSK		; Keep only what we want to keep
+	IORB	1,SCPSTS		; Copy the current status bits
+	CONO	SC11,SCPI(1)		; So he sees no change. don't interrupt
+	RET
+; PI side service
+	USE RESPC
+; Control interrupts, process IO inits from PDP11 and set up data
+; transfers.
+
+SCPCTR:	CONSZ	SC11,RNBLK 		; 11 requesting we take data?
+	JRST SCPCID			; Yes
+	CONSZ	SC11,RRRDY		; No, then are they ready for ours?
+	JRST SCPCOD			; Yes
+	CONSZ	SC11,ACK11		; No, then is it an MTOPR acknowledge?
+	JRST SCPCAK			; Yes
+SCPCT1:	MOVE	1,SCPSTS		; Get status, (add new codes here)
+	CONO	SC11,SCPI+CLR19(1)	; Clear the interrupt
+	UNBRK SCP
+
+; 11 wants us to take data, init 11 if we can, else let DUMPI do it
+
+SCPCID:	MOVE	1,SCPSTS		; Get status
+	TLNE	1,IACTIV		; If we are not active
+	TRNE	1,RRRDY			; Or ready is already set
+	JRST SCPCT1			; Then don't do anything
+	JSP	4,INPINI		; Otherwise, get it moving
+	JRST SCPCT1
+
+; 11 ready for data. check that we haven't already started.
+; If not then DATAO first word and clear TNBLK.
+
+SCPCOD:	MOVE	1,SCPSTS		; Get the status
+	TLNE	1,OACTIV		; Continue only if OACTIV and
+	TRZN	1,TNBLK			; NBLK set (clr NBLK) while I'm here)
+	JRST SCPCT1			; Else return
+	MOVEM	1,SCPSTS		; Update status
+	CONO	SC11,SCPI(1)		; Here and for the 11
+	BLKO	SC11,SCPOPT		; Pump the first word
+	JRST SCPCT1
+
+; 11 acknowledging MTOPR command. Clear bits and set OPRCMP
+
+SCPCAK:	MOVEI	1,OPRMSK	; Mask to clear all the MTOPR bits
+	ANDCAB	1,SCPSTS
+	CONO	SC11,SCPI(1)	; Reflect them in the 11 status too
+	MOVSI	1,OPRCMP
+	IORM	1,SCPSTS	; Mark as complete so process can unblock
+	JRST SCPCT1
+; Input data from pdp11 to process
+
+SCPIN:	SKIPL	SCPIPT		; End of buffer?
+	JRST SCPIER		; Hmm overflowed buffer, error
+	BLKI	SC11,SCPIPT	; Take in a word
+	JFCL
+	CONSO	SC11,REBLK	; Is this the end yet?
+	UNBRK SCP		; No
+	MOVSI	1,FULL
+	IORM	1,SCPSTS	; Set FULL
+	MOVEI	1,RRRDY
+	ANDCAB	1,SCPSTS
+	CONO	SC11,SCPI(1)	; Clear the RRDY bit everywhere
+	UNBRK SCP
+
+SCPIER:	DATAI	SC11,1		; Get rid of word
+	MOVSI	1,IOVFLO	; Say we overflowed buffer
+	CONSO	SC11,REBLK	; The end yet?
+	TLO	1,FULL		; Yes, mark it
+	IORM	1,SCPSTS	; Set status
+	MOVEI	1,RRRDY
+	ANDCAB	1,SCPSTS
+	CONO	SC11,SCPI(1)	; Clear the RRDY bit everywhere
+	UNBRK SCP
+; Output data from process to pdp11
+; IOWD faked up so that overflow occurs on next to last word
+; This allows cheap test to see whether to set EBLK
+; DUMPO blocks until EBLK is set. This indicates transfer complete
+; which will allow fast page unlocking
+
+SCPOUT:	SKIPL	SCPOPT		; Last word?
+	JRST SCPOU1		; Yes set EBLK first
+	BLKO	SC11,SCPOPT	; No, just send it
+	JFCL
+	UNBRK	SCP
+
+SCPOU1:	MOVEI	1,TEBLK		; Says no more in this block
+	IORB	1,SCPSTS	; Make 2 copies
+	CONO	SC11,SCPI(1)	; Tell the 11 about it
+	MOVE	1,SCPOPT	; Get the pointer
+	MOVE	1,1(1)		; Do the increment and get the data word
+	DATAO	SC11,1		; and give it to the 11
+	UNBRK SCP
+
+>	; end IFDEF SCPN on page one
+	END
