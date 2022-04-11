@@ -1,0 +1,131 @@
+	title	mons
+	search	stenex
+a==1
+b==2
+c==3
+d==4
+
+i==5
+j==6
+k==7
+l==10
+m==11
+
+p==17
+
+lpdl==100
+.jbff==44
+
+mons:	reset
+	move	p,[iowd	lpdl,pdl]
+m.1:	hrroi	a,[asciz/Which MONSYMS file? /]
+	psout
+	movsi	a,160003
+	move	b,[100,,101]
+	gtjfn
+	 jrst	m.1
+	movem	a,mjfn#
+	move	b,[440000,,200000]
+	openf
+	 jrst	m.1
+m.3:	hrroi	a,[asciz/Output file? /]
+	psout
+	movsi	a,660003
+	move	b,[100,,101]
+	gtjfn
+	 jrst	m.3
+	movem	a,ojfn#
+	move	b,[440000,,100000]
+	openf
+	 jrst	m.3
+
+	move	a,mjfn
+	bin
+	movem	b,monsyms#
+	hll	i,b
+	hrr	i,.jbff
+
+m.2:	move	a,mjfn
+	bin
+	move	c,b
+	tlz	c,(74b3)	;rid the radix50 code
+	camn	c,[radix50 0,TENDMP]	;quit here
+	jrst	m.6
+	movem	b,0(i)
+	bin
+;can't do this because cp0reg is -1,,50473
+;	tlne	b,-1		;ignore symbols with lh stuff
+;	jrst	m.2
+	aobjn	i,.+1
+	movem	b,0(i)
+	aobjn	i,m.2
+m.6:	closf
+	 halt
+	tlz	i,-1
+	sub	i,.jbff
+	movns	i
+	hrlm	i,monsyms
+
+	pushj	p,sortem
+
+	move	a,ojfn
+	move	b,monsyms
+	bout
+	hll	i,b
+	hrr	i,.jbff
+
+m4:	move	b,0(i)
+	bout
+	aobjn	i,m4
+	closf
+	 halt
+	haltf
+	jrst	mons
+	
+;sort the monsyms for easy lookup
+sortem:	hlre	l,monsyms	;neg size of table
+	movms	l		;make it pos
+	hrrz	k,.jbff		;Addr of 1st entry
+	setz	i,		;i _ 0
+s.1:	move	j,k
+	add	j,i		;j _ i
+	move	a,1(j)
+	camle	a,3(j)		;if a(i) leq a(i+1)
+	jrst	s.3		;out of order
+s.2:	move	i,m		;take off where we left off
+	addi	i,2		;i _ i + 1
+	move	m,i		;remember how far we got
+	caige	i,-1(l)		;skip if fini
+	jrst	s.1
+	popj	p,
+s.3:	exch	a,3(j)		;swap entries
+	movem	a,1(j)
+	move	a,0(j)
+	exch	a,2(j)
+	movem	a,0(j)
+	jumpe	i,s.2		;we were at the beginng
+	subi	i,2		;we weren't, so back up (sink)
+	jrst	s.1
+	
+rad50:	hrrz	a,ojfn
+	ldb	c,[point 32,j,35]
+spt1:	idivi	c,50
+	hrlm	d,0(p)
+	skipe	c
+	pushj	p,spt1		;a little recursion here
+	hlrz	c,0(p)		;retrieve char
+	jumpe	c,tout
+	addi	c,257
+	caile	c,271
+	addi	c,7
+	caile	c,332
+	subi	c,70
+	cain	c,243
+	movei	c,256
+tout:	move	b,c
+	bout
+	popj	p,
+
+pdl:	block	lpdl
+
+	end	mons
