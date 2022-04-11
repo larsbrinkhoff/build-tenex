@@ -1,0 +1,3 @@
+[submodule "tools"]
+	path = install/tools
+	url = https://github.com/larsbrinkhoff/pdp10-its-disassembler
